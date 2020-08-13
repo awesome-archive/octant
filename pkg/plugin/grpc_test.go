@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -14,17 +14,18 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/testutil"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin"
-	"github.com/vmware/octant/pkg/plugin/dashboard"
-	"github.com/vmware/octant/pkg/plugin/fake"
-	"github.com/vmware/octant/pkg/view/component"
-	"github.com/vmware/octant/pkg/view/flexlayout"
+	"github.com/vmware-tanzu/octant/internal/testutil"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/pkg/plugin/dashboard"
+	"github.com/vmware-tanzu/octant/pkg/plugin/fake"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/view/flexlayout"
 )
 
 type grpcClientMocks struct {
@@ -87,12 +88,14 @@ func Test_GRPCClient_Content(t *testing.T) {
 		contentResponseBytes, err := json.Marshal(&contentResponse)
 		require.NoError(t, err)
 
+		contentResponse.ButtonGroup = nil
+
 		resp := &dashboard.ContentResponse{
 			ContentResponse: contentResponseBytes,
 		}
 
 		mocks.protoClient.EXPECT().
-			Content(gomock.Any(), req).
+			Content(gomock.Any(), req, grpc.WaitForReady(true)).
 			Return(resp, nil)
 
 		client := mocks.genClient()
@@ -115,7 +118,7 @@ func Test_GRPCClient_Navigation(t *testing.T) {
 		}
 
 		mocks.protoClient.EXPECT().
-			Navigation(gomock.Any(), req).
+			Navigation(gomock.Any(), req, grpc.WaitForReady(true)).
 			Return(resp, nil)
 
 		client := mocks.genClient()
@@ -147,7 +150,7 @@ func Test_GRPCClient_Register(t *testing.T) {
 			},
 		}
 
-		mocks.protoClient.EXPECT().Register(gomock.Any(), gomock.Any()).Return(resp, nil)
+		mocks.protoClient.EXPECT().Register(gomock.Any(), gomock.Any(), grpc.WaitForReady(true)).Return(resp, nil)
 
 		client := mocks.genClient()
 		apiAddress := "localhost:54321"
@@ -200,7 +203,7 @@ func Test_GRPCClient_Print(t *testing.T) {
 			},
 			Items: itemsData,
 		}
-		mocks.protoClient.EXPECT().Print(gomock.Any(), gomock.Eq(objectRequest)).Return(printResponse, nil)
+		mocks.protoClient.EXPECT().Print(gomock.Any(), gomock.Eq(objectRequest), grpc.WaitForReady(true)).Return(printResponse, nil)
 
 		client := mocks.genClient()
 		ctx := context.Background()
@@ -244,7 +247,7 @@ func Test_GRPCClient_PrintTab(t *testing.T) {
 		}
 
 		mocks.protoClient.EXPECT().
-			PrintTab(gomock.Any(), gomock.Eq(objectRequest)).
+			PrintTab(gomock.Any(), gomock.Eq(objectRequest), grpc.WaitForReady(true)).
 			Return(tabResponse, nil)
 
 		client := mocks.genClient()
@@ -267,7 +270,7 @@ func Test_GRPCClient_PrintTab(t *testing.T) {
 			},
 		}
 
-		assert.Equal(t, expected, got)
+		testutil.AssertJSONEqual(t, expected, got)
 	})
 }
 
@@ -296,7 +299,7 @@ func Test_GRPCClient_ObjectStatus(t *testing.T) {
 			ObjectStatus: statusData,
 		}
 
-		mocks.protoClient.EXPECT().ObjectStatus(gomock.Any(), gomock.Eq(objectRequest)).Return(objectStatusResponse, nil)
+		mocks.protoClient.EXPECT().ObjectStatus(gomock.Any(), gomock.Eq(objectRequest), grpc.WaitForReady(true)).Return(objectStatusResponse, nil)
 
 		client := mocks.genClient()
 		ctx := context.Background()

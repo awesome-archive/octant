@@ -1,0 +1,180 @@
+name: preflight-checks
+on:
+  push:
+    tags:
+    - 'v*'
+    branches:
+    - master
+    - release-*
+  pull_request:
+    branches:
+    - master
+    - release-*
+
+jobs:
+  go_unit_tests:
+    strategy:
+      matrix:
+        go-version:
+          - 1.14.x
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    name: Golang tests on ${{ matrix.platform }}
+    steps:
+      - uses: actions/setup-node@v2.1.1
+        with:
+          node-version: 10.x
+      - uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go-version }}
+      - uses: actions/checkout@v2
+      - name: install_prettier
+        run: |
+          npm i -g prettier
+      - name: run_go_tests
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          go run build.go test
+
+  verify_tag:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v2
+        with:
+          go-version: 1.14.x
+      - uses: actions/checkout@v2
+      - name: Get tag
+        run: echo ::set-env name=GITHUB_TAG::${GITHUB_REF/refs\/tags\//}
+      - name: Verify tag
+        run: |
+          bash ./ci/github-actions-tag-check.sh
+        shell: bash
+
+  node_unit_tests:
+    strategy:
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    name: Karma tests on ${{ matrix.platform }}
+    steps:
+      - uses: actions/setup-node@v2.1.1
+        with:
+          node-version: 10.x
+      - uses: actions/checkout@v2
+      - name: Get npm cache directory
+        id: npm-cache
+        run: |
+          echo "::set-output name=dir::$(npm config get cache)"
+      - uses: actions/cache@v2
+        if: github.event_name == 'push'
+        with:
+          path: ${{ steps.npm-cache.outputs.dir }}
+          key: ${{ runner.os }}-node-push-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-push-${{ hashFiles('**/package-lock.json') }}
+            ${{ runner.os }}-node-push-
+      - uses: actions/cache@v2
+        if: github.event_name == 'pull_request'
+        with:
+          path: ${{ steps.npm-cache.outputs.dir }}
+          key: ${{ runner.os }}-node-pr-${{ github.event.number }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-pr-${{ github.event.number }}-${{ hashFiles('**/package-lock.json') }}
+            ${{ runner.os }}-node-pr-${{ github.event.number }}-
+            ${{ runner.os }}-node-push-${{ hashFiles('**/package-lock.json') }}
+            ${{ runner.os }}-node-push-
+      - name: run_karma
+        run: |
+          cd web
+          npm ci --prefer-offline --no-audit
+          npm run test:headless
+
+  bundle_assets:
+    needs: [go_unit_tests, node_unit_tests]
+    strategy:
+      matrix:
+        go-version:
+          - 1.14.x
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    name: Build on ${{ matrix.platform }}
+    steps:
+      - uses: actions/setup-node@v2.1.1
+        with:
+          node-version: 10.x
+      - uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go-version }}
+      - uses: actions/checkout@v2
+      - name: Get npm cache directory
+        id: npm-cache
+        run: |
+          echo "::set-output name=dir::$(npm config get cache)"
+      - uses: actions/cache@v2
+        if: github.event_name == 'push'
+        with:
+          path: ${{ steps.npm-cache.outputs.dir }}
+          key: ${{ runner.os }}-node-push-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-push-${{ hashFiles('**/package-lock.json') }}
+            ${{ runner.os }}-node-push-
+      - uses: actions/cache@v2
+        if: github.event_name == 'pull_request'
+        with:
+          path: ${{ steps.npm-cache.outputs.dir }}
+          key: ${{ runner.os }}-node-pr-${{ github.event.number }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-pr-${{ github.event.number }}-${{ hashFiles('**/package-lock.json') }}
+            ${{ runner.os }}-node-pr-${{ github.event.number }}-
+            ${{ runner.os }}-node-push-${{ hashFiles('**/package-lock.json') }}
+            ${{ runner.os }}-node-push-
+      - name: Build node modules
+        run: |
+          cd web
+          npm ci --prefer-offline --no-audit
+          npm run-script build
+        shell: bash
+      - name: Go tools
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          go run build.go go-install
+          go generate ./web
+          go generate ./pkg/plugin/plugin.go
+      - name: Build binary
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          go run build.go build
+          ./build/octant version
+      - name: Upload web/rice-box.go
+        if: matrix.platform == 'ubuntu-latest'
+        uses: actions/upload-artifact@v2.1.4
+        with:
+          name: rice-web
+          path: web/rice-box.go
+
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [bundle_assets, verify_tag]
+    runs-on: ubuntu-latest
+    container: goreleaser/goreleaser:v0.128.0-cgo
+    steps:
+      - uses: actions/checkout@v2
+      - name: Download web/rice-box.go
+        uses: actions/download-artifact@v2
+        with:
+          name: rice-web
+          path: web
+      - name: Change permissions of rice files
+        # Uploading artifact changes file permissions
+        run: |
+          chown -R $(whoami):$(whoami) .
+      - name: Run GoReleaser
+        run: |
+          goreleaser --rm-dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -53,14 +53,15 @@ func Test_Table_Marshal(t *testing.T) {
 		{
 			name: "general",
 			input: &Table{
-				base: newBase(typeTable, TitleFromString("my table")),
+				Base: newBase(TypeTable, TitleFromString("my table")),
 				Config: TableConfig{
+					Filters: map[string]TableFilter{},
 					Columns: []TableCol{
-						TableCol{Name: "Name", Accessor: "Name"},
-						TableCol{Name: "Description", Accessor: "Description"},
+						{Name: "Name", Accessor: "Name"},
+						{Name: "Description", Accessor: "Description"},
 					},
 					Rows: []TableRow{
-						TableRow{
+						{
 							"Name": &Text{
 								Config: TextConfig{
 									Text: "First",
@@ -72,7 +73,7 @@ func Test_Table_Marshal(t *testing.T) {
 								},
 							},
 						},
-						TableRow{
+						{
 							"Name": &Text{
 								Config: TextConfig{
 									Text: "Last",
@@ -86,6 +87,7 @@ func Test_Table_Marshal(t *testing.T) {
 						},
 					},
 					EmptyContent: "",
+					Loading:      false,
 				},
 			},
 			expectedPath: "table.json",
@@ -95,7 +97,7 @@ func Test_Table_Marshal(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			actual, err := json.Marshal(tc.input)
-			isErr := (err != nil)
+			isErr := err != nil
 			if isErr != tc.isErr {
 				t.Fatalf("Unexpected error: %v", err)
 			}
@@ -115,12 +117,12 @@ func Test_Table_isEmpty(t *testing.T) {
 	}{
 		{
 			name:    "empty",
-			table:   NewTable("my table", NewTableCols("col1")),
+			table:   NewTable("my table", "placeholder", NewTableCols("col1")),
 			isEmpty: true,
 		},
 		{
 			name: "not empty",
-			table: NewTableWithRows("my table", NewTableCols("col1"), []TableRow{
+			table: NewTableWithRows("my table", "placeholder", NewTableCols("col1"), []TableRow{
 				{"col1": NewText("cell1")},
 			}),
 			isEmpty: false,
@@ -135,7 +137,7 @@ func Test_Table_isEmpty(t *testing.T) {
 }
 
 func Test_Table_AddColumn(t *testing.T) {
-	table := NewTable("table", NewTableCols("a"))
+	table := NewTable("table", "placeholder", NewTableCols("a"))
 	table.AddColumn("b")
 	expected := NewTableCols("a", "b")
 
@@ -181,11 +183,24 @@ func Test_Table_Sort(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			table := NewTableWithRows("table", NewTableCols("a"), tc.rows)
+			table := NewTableWithRows("table", "placeholder", NewTableCols("a"), tc.rows)
 			table.Sort("a", tc.reverse)
-			expected := NewTableWithRows("table", NewTableCols("a"), tc.expected)
+			expected := NewTableWithRows("table", "placeholder", NewTableCols("a"), tc.expected)
 
 			assert.Equal(t, expected, table)
 		})
 	}
+}
+
+func TestTable_AddFilter(t *testing.T) {
+	table := NewTable("table", "placeholder", NewTableCols("a"))
+	filter := TableFilter{
+		Values:   []string{"foo", "bar"},
+		Selected: []string{"foo"},
+	}
+	table.AddFilter("a", filter)
+
+	expected := map[string]TableFilter{"a": filter}
+
+	assert.Equal(t, expected, table.Config.Filters)
 }

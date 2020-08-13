@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -53,7 +53,7 @@ func Test_Text_Marshal(t *testing.T) {
 		{
 			name: "with title",
 			input: &Text{
-				base: newBase(typeText, TitleFromString("image")),
+				Base: newBase(TypeText, TitleFromString("image")),
 				Config: TextConfig{
 					Text: "nginx:latest",
 				},

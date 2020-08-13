@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -12,16 +12,17 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/vmware/octant/internal/gvk"
-	"github.com/vmware/octant/internal/portforward"
-	portForwardFake "github.com/vmware/octant/internal/portforward/fake"
-	"github.com/vmware/octant/internal/testutil"
-	"github.com/vmware/octant/pkg/plugin/api"
-	"github.com/vmware/octant/pkg/store"
-	storeFake "github.com/vmware/octant/pkg/store/fake"
+	"github.com/vmware-tanzu/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/portforward"
+	portForwardFake "github.com/vmware-tanzu/octant/internal/portforward/fake"
+	"github.com/vmware-tanzu/octant/internal/testutil"
+	"github.com/vmware-tanzu/octant/pkg/plugin/api"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	storeFake "github.com/vmware-tanzu/octant/pkg/store/fake"
 )
 
 type apiMocks struct {
@@ -68,7 +69,7 @@ func TestAPI(t *testing.T) {
 			name: "list",
 			initFunc: func(t *testing.T, mocks *apiMocks) {
 				mocks.objectStore.EXPECT().
-					List(gomock.Any(), gomock.Eq(listKey)).Return(objects, nil)
+					List(gomock.Any(), gomock.Eq(listKey)).Return(objects, false, nil)
 			},
 			doFunc: func(t *testing.T, client *api.Client) {
 				clientCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -80,6 +81,20 @@ func TestAPI(t *testing.T) {
 				expected := objects
 
 				assert.Equal(t, expected, got)
+			},
+		},
+		{
+			name: "create",
+			initFunc: func(t *testing.T, mocks *apiMocks) {
+				mocks.objectStore.EXPECT().
+					Create(gomock.Any(), gomock.Eq(object)).Return(nil)
+			},
+			doFunc: func(t *testing.T, client *api.Client) {
+				clientCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				defer cancel()
+
+				err := client.Create(clientCtx, object)
+				require.NoError(t, err)
 			},
 		},
 		{
@@ -112,7 +127,7 @@ func TestAPI(t *testing.T) {
 
 				mocks.pf.EXPECT().
 					Create(
-						gomock.Any(), gvk.Pod, "pod", "default", uint16(8080)).
+						gomock.Any(), gomock.Any(), gvk.Pod, "pod", "default", uint16(8080)).
 					Return(resp, nil)
 			},
 			doFunc: func(t *testing.T, client *api.Client) {
@@ -152,7 +167,7 @@ func TestAPI(t *testing.T) {
 
 				mocks.pf.EXPECT().
 					Create(
-						gomock.Any(), gvk.Pod, "pod", "default", uint16(8080)).
+						gomock.Any(), gomock.Any(), gvk.Pod, "pod", "default", uint16(8080)).
 					Return(resp, nil)
 			},
 			doFunc: func(t *testing.T, client *api.Client) {
@@ -173,6 +188,8 @@ func TestAPI(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			controller := gomock.NewController(t)
 			defer controller.Finish()
+
+			viper.SetDefault("client-max-recv-msg-size", 1024*1024*16)
 
 			appObjectStore := storeFake.NewMockStore(controller)
 			pf := portForwardFake.NewMockPortForwarder(controller)

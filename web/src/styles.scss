@@ -1,4 +1,4 @@
-/* Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+/* Copyright (c) 2019 the Octant contributors. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -8,5 +8,42 @@
 @import './sass/mixins';
 @import './sass/variables';
 @import '~highlight.js/styles/github.css';
-@import "~@ng-select/ng-select/themes/default.theme.css";
+@import '~@ng-select/ng-select/themes/default.theme.css';
 
+// Avoid Datagrid's header sticky position.
+.datagrid-table .datagrid-header {
+  position: initial;
+}
+
+.clr-vertical-nav .nav-btn {
+  display: none;
+}
+
+// avoid markdown text rendering badly in table/cards
+.datagrid-cell .markdown p, .card-block .markdown p {
+  margin-top: 0;
+}
+
+// work around clarity tooltip limitations
+.tooltip-content {
+  color: var(--tooltip-text-color)!important;
+  background-color: var(--selection-color)!important;
+  display: block;
+  z-index: 503;
+  position: fixed;
+  bottom: unset;
+  left: unset;
+  right: unset;
+  top: unset;
+  margin-top: -64px;
+  margin-left: 32px;
+  width: auto!important;
+  height: auto;
+  transition: opacity 0.5s 0.25s ease-in;
+  padding: 6px 9px;
+}
+
+.tooltip-content:before {
+  border-left-color: var(--selection-color)!important;
+  border-top-color: var(--selection-color)!important;
+}

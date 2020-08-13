@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -17,6 +17,6 @@ func Test_FromKubeConfig(t *testing.T) {
 	kubeConfig := filepath.Join("testdata", "kubeconfig.yaml")
 	config := RESTConfigOptions{}
 
-	_, err := FromKubeConfig(context.TODO(), kubeConfig, "", config)
+	_, err := FromKubeConfig(context.TODO(), kubeConfig, "", "", []string{}, config)
 	require.NoError(t, err)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -75,15 +75,17 @@ type ResourceViewerConfig struct {
 }
 
 // ResourceView is a resource viewer component.
+//
+// +octant:component
 type ResourceViewer struct {
-	base
+	Base
 	Config ResourceViewerConfig `json:"config,omitempty"`
 }
 
 // NewResourceViewer creates a resource viewer component.
 func NewResourceViewer(title string) *ResourceViewer {
 	return &ResourceViewer{
-		base: newBase(typeResourceViewer, TitleFromString(title)),
+		Base: newBase(TypeResourceViewer, TitleFromString(title)),
 		Config: ResourceViewerConfig{
 			Edges: AdjList{},
 			Nodes: Nodes{},
@@ -152,7 +154,7 @@ func (rv *ResourceViewer) MarshalJSON() ([]byte, error) {
 	}
 
 	m := resourceViewerMarshal(*rv)
-	m.Metadata.Type = typeResourceViewer
+	m.Metadata.Type = TypeResourceViewer
 	m.Metadata.Title = rv.Metadata.Title
 
 	return json.Marshal(&m)

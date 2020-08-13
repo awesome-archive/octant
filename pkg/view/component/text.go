@@ -1,32 +1,63 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package component
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
+
+// TextStatus is the status of a text component
+type TextStatus int
+
+const (
+	// TextStatusOK
+	TextStatusOK TextStatus = 1
+	// TextStatusWarning
+	TextStatusWarning TextStatus = 2
+	// TextStatusError
+	TextStatusError TextStatus = 3
+)
 
 // Text is a component for text
+// +octant:component
 type Text struct {
-	base
+	Base
 	Config TextConfig `json:"config"`
 }
 
 // TextConfig is the contents of Text
 type TextConfig struct {
-	Text       string `json:"value"`
-	IsMarkdown bool   `json:"isMarkdown,omitempty"`
+	// Text is the text that will be displayed.
+	Text string `json:"value"`
+	// IsMarkdown sets if the component has markdown text.
+	IsMarkdown bool `json:"isMarkdown,omitempty"`
+	// Status sets the status of the component.
+	Status TextStatus `json:"status,omitempty"`
 }
 
 // NewText creates a text component
-func NewText(s string) *Text {
-	return &Text{
-		base: newBase(typeText, nil),
+func NewText(s string, options ...func(*Text)) *Text {
+	t := &Text{
+		Base: newBase(TypeText, nil),
 		Config: TextConfig{
 			Text: s,
 		},
 	}
+
+	for _, option := range options {
+		option(t)
+	}
+
+	return t
+}
+
+// NewTextf creates a a text component using a printf like helper.
+func NewTextf(format string, a ...interface{}) *Text {
+	return NewText(fmt.Sprintf(format, a...))
 }
 
 // NewMarkdownText creates a text component styled with markdown.
@@ -52,6 +83,11 @@ func (t *Text) DisableMarkdown() {
 	t.Config.IsMarkdown = false
 }
 
+// SetStatus sets the status of the text component.
+func (t *Text) SetStatus(status TextStatus) {
+	t.Config.Status = status
+}
+
 // SupportsTitle denotes this is a TextComponent.
 func (t *Text) SupportsTitle() {}
 
@@ -60,7 +96,7 @@ type textMarshal Text
 // MarshalJSON implements json.Marshaler
 func (t *Text) MarshalJSON() ([]byte, error) {
 	m := textMarshal(*t)
-	m.Metadata.Type = typeText
+	m.Metadata.Type = TypeText
 	return json.Marshal(&m)
 }
 

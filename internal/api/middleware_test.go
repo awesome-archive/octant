@@ -1,17 +1,18 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +42,7 @@ func Test_rebindHandler(t *testing.T) {
 			name:         "custom host",
 			host:         "0.0.0.0",
 			expectedCode: http.StatusOK,
-			listenerKey:  "OCTANT_LISTENER_ADDR",
+			listenerKey:  "listener-addr",
 			listenerAddr: "0.0.0.0:0000",
 		},
 	}
@@ -49,14 +50,14 @@ func Test_rebindHandler(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.listenerKey != "" {
-				os.Setenv(tc.listenerKey, tc.listenerAddr)
-				defer os.Unsetenv(tc.listenerKey)
+				viper.Set(tc.listenerKey, tc.listenerAddr)
+				defer viper.Set(tc.listenerKey, "")
 			}
 			fake := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprint(w, "response")
 			})
 
-			wrapped := rebindHandler(acceptedHosts())(fake)
+			wrapped := rebindHandler(context.TODO(), acceptedHosts())(fake)
 
 			ts := httptest.NewServer(wrapped)
 			defer ts.Close()
@@ -72,6 +73,67 @@ func Test_rebindHandler(t *testing.T) {
 			require.NoError(t, err)
 
 			require.Equal(t, tc.expectedCode, res.StatusCode)
+		})
+	}
+}
+
+func Test_shouldAllowHost(t *testing.T) {
+	cases := []struct {
+		name          string
+		host          string
+		acceptedHosts []string
+		expected      bool
+	}{
+		{
+			name:          "0.0.0.0 allow all",
+			host:          "192.168.1.1",
+			acceptedHosts: []string{"127.0.0.1", "localhost", "0.0.0.0"},
+			expected:      true,
+		},
+		{
+			name:          "deny 192.168.1.1",
+			host:          "192.168.1.1",
+			acceptedHosts: []string{"127.0.0.1", "localhost"},
+			expected:      false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, shouldAllowHost(tc.host, tc.acceptedHosts))
+		})
+	}
+}
+
+func Test_checkSameOrigin(t *testing.T) {
+	cases := []struct {
+		name     string
+		host     string
+		origin   string
+		expected bool
+	}{
+		{
+			name:     "host/origin match",
+			host:     "192.168.1.1:7777",
+			origin:   "http://192.168.1.1:7777",
+			expected: true,
+		},
+		{
+			name:     "host/origin do not match",
+			host:     "192.168.1.1:7777",
+			origin:   "http://127.0.0.1:7777",
+			expected: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &http.Request{
+				Host:   tc.host,
+				Header: make(http.Header, 1),
+			}
+			r.Header.Set("Origin", tc.origin)
+			require.Equal(t, tc.expected, checkSameOrigin(r))
 		})
 	}
 }

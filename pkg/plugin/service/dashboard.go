@@ -5,11 +5,11 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/vmware/octant/pkg/plugin/api"
-	"github.com/vmware/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/plugin/api"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
 
-//go:generate mockgen -source=dashboard.go -destination=./fake/mock_dashboard.go -package=fake github.com/vmware/octant/pkg/plugin/service Dashboard
+//go:generate mockgen -destination=./fake/mock_dashboard.go -package=fake github.com/vmware-tanzu/octant/pkg/plugin/service Dashboard
 
 // Dashboard is the client a plugin can use to interact with Octant.
 type Dashboard interface {
@@ -19,6 +19,7 @@ type Dashboard interface {
 	Update(ctx context.Context, object *unstructured.Unstructured) error
 	PortForward(ctx context.Context, req api.PortForwardRequest) (api.PortForwardResponse, error)
 	CancelPortForward(ctx context.Context, id string)
+	ListNamespaces(ctx context.Context) (api.NamespacesResponse, error)
 	ForceFrontendUpdate(ctx context.Context) error
 }
 

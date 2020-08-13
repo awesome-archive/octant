@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -29,7 +29,7 @@ func Test_YAML_Marshal(t *testing.T) {
 				Config: YAMLConfig{
 					Data: "---\nfoo: bar",
 				},
-				base: newBase(typeYAML, nil),
+				Base: newBase(TypeYAML, nil),
 			},
 			expectedPath: "yaml1.json",
 		},

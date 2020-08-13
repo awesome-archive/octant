@@ -1,0 +1,36 @@
+/* Copyright (c) 2020 the Octant contributors. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+:host-context(body) {
+  --creadcrumb-link-color: #0079b8;
+}
+
+:host-context(body.dark) {
+  --creadcrumb-link-color: #49AFD9;
+}
+
+.breadcrumb {
+  &-body {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  &-header {
+    margin-top: 0.2rem;
+    line-height: 1.8rem;
+  }
+
+  &-span {
+    padding-right: 0.5rem;
+  }
+
+  .separator {
+    margin-right: 0.2rem;
+    transform: rotate(90deg);
+  }
+
+  a {
+    color: var(--creadcrumb-link-color);
+  }
+}

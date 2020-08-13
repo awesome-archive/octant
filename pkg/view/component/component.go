@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -10,27 +10,49 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
+
+	"github.com/vmware-tanzu/octant/pkg/action"
 )
+
+// EmptyContentResponse is an empty content response.
+var EmptyContentResponse = ContentResponse{}
 
 // ContentResponse is a a content response. It contains a
 // title and one or more components.
 type ContentResponse struct {
-	Title      []TitleComponent `json:"title,omitempty"`
-	Components []Component      `json:"viewComponents"`
-	IconName   string           `json:"iconName,omitempty"`
-	IconSource string           `json:"iconSource,omitempty"`
+	Title              []TitleComponent `json:"title,omitempty"`
+	Components         []Component      `json:"viewComponents"`
+	ExtensionComponent Component        `json:"extensionComponent,omitempty"`
+	ButtonGroup        *ButtonGroup     `json:"buttonGroup,omitempty"`
 }
 
 // NewContentResponse creates an instance of ContentResponse.
 func NewContentResponse(title []TitleComponent) *ContentResponse {
 	return &ContentResponse{
-		Title: title,
+		Title:       title,
+		ButtonGroup: NewButtonGroup(),
 	}
 }
 
-// Add adds zero or more components to a content response.
+// Add adds zero or more components to a content response. Nil components
+// will be ignored.
 func (c *ContentResponse) Add(components ...Component) {
-	c.Components = append(c.Components, components...)
+	for i := range components {
+		if components[i] != nil {
+			c.Components = append(c.Components, components[i])
+		}
+	}
+}
+
+// SetExtension adds zero or more components to an extension content response.
+func (c *ContentResponse) SetExtension(component *Extension) {
+	c.ExtensionComponent = component
+}
+
+// AddButton adds one or more actions to a content response.
+func (c *ContentResponse) AddButton(name string, payload action.Payload, buttonOptions ...ButtonOption) {
+	button := NewButton(name, payload, buttonOptions...)
+	c.ButtonGroup.AddButton(button)
 }
 
 // UnmarshalJSON unmarshals a content response from JSON.
@@ -118,8 +140,9 @@ func (m *Metadata) SetTitleText(parts ...string) {
 
 func (m *Metadata) UnmarshalJSON(data []byte) error {
 	x := struct {
-		Type  string        `json:"type,omitempty"`
-		Title []TypedObject `json:"title,omitempty"`
+		Type     string        `json:"type,omitempty"`
+		Title    []TypedObject `json:"title,omitempty"`
+		Accessor string        `json:"accessor,omitempty"`
 	}{}
 
 	if err := json.Unmarshal(data, &x); err != nil {
@@ -127,11 +150,12 @@ func (m *Metadata) UnmarshalJSON(data []byte) error {
 	}
 
 	m.Type = x.Type
+	m.Accessor = x.Accessor
 
 	for _, title := range x.Title {
 		vc, err := title.ToComponent()
 		if err != nil {
-			return errors.Wrap(err, "unmarshaling title")
+			return errors.Wrap(err, "unmarshal-ing title")
 		}
 
 		tvc, ok := vc.(TitleComponent)
@@ -152,8 +176,10 @@ type Component interface {
 
 	// GetMetadata returns metadata for the component.
 	GetMetadata() Metadata
-	// SetAccessor sets the accessfor the component.
-	SetAccessor(string)
+	// GetMetadata sets the metadata for the component.
+	SetMetadata(metadata Metadata)
+	// SetAccessor sets the accessor for the component.
+	SetAccessor(accessor string)
 	// IsEmpty returns true if the component is "empty".
 	IsEmpty() bool
 	// String returns a string representation of the component.
@@ -174,7 +200,15 @@ func Title(components ...TitleComponent) []TitleComponent {
 	return components
 }
 
-// TitleFromString is a convenience methods for create a title from a string.
+// TitleFromString is a convenience method for create a title from a string.
 func TitleFromString(s string) []TitleComponent {
 	return Title(NewText(s))
+}
+
+// TitleFromTitleComponent gets a title from a TitleComponent
+func TitleFromTitleComponent(tc []TitleComponent) (string, error) {
+	if len(tc) != 1 {
+		return "", errors.New("exactly one title component can be converted")
+	}
+	return tc[0].String(), nil
 }

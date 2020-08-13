@@ -50,3 +50,10 @@ Thumbs.db
 
 .idea
 ./rice-box.go
+
+/main.js
+/main.js.map
+
+#compodoc documentation file
+/documentation.json
+/storybook-static

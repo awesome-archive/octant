@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,13 +7,14 @@ package describer
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"reflect"
+	"strings"
 
-	"github.com/vmware/octant/pkg/icon"
-	"github.com/vmware/octant/pkg/store"
-	"github.com/vmware/octant/pkg/view/component"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/vmware-tanzu/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 const (
@@ -25,6 +26,11 @@ type ResourceTitle struct {
 	Object string
 }
 
+type ResourceLink struct {
+	Title string
+	Url   string
+}
+
 type ResourceOptions struct {
 	Path                  string
 	ObjectStoreKey        store.Key
@@ -34,6 +40,7 @@ type ResourceOptions struct {
 	DisableResourceViewer bool
 	ClusterWide           bool
 	IconName              string
+	RootPath              ResourceLink
 }
 
 type Resource struct {
@@ -48,12 +55,11 @@ func NewResource(options ResourceOptions) *Resource {
 	}
 }
 
-func (r *Resource) Describe(ctx context.Context, prefix, namespace string, options Options) (component.ContentResponse, error) {
-	return r.List().Describe(ctx, prefix, namespace, options)
+func (r *Resource) Describe(ctx context.Context, namespace string, options Options) (component.ContentResponse, error) {
+	return r.List().Describe(ctx, namespace, options)
 }
 
 func (r *Resource) List() *List {
-	iconName, iconSource := loadIcon(r.IconName)
 
 	return NewList(
 		ListConfig{
@@ -67,14 +73,12 @@ func (r *Resource) List() *List {
 				return reflect.New(reflect.ValueOf(r.ObjectType).Elem().Type()).Interface()
 			},
 			IsClusterWide: r.ClusterWide,
-			IconName:      iconName,
-			IconSource:    iconSource,
+			RootPath:      r.RootPath,
 		},
 	)
 }
 
 func (r *Resource) Object() *Object {
-	iconName, iconSource := loadIcon(r.IconName)
 
 	return NewObject(
 		ObjectConfig{
@@ -84,9 +88,7 @@ func (r *Resource) Object() *Object {
 			ObjectType: func() interface{} {
 				return reflect.New(reflect.ValueOf(r.ObjectType).Elem().Type()).Interface()
 			},
-			DisableResourceViewer: r.DisableResourceViewer,
-			IconName:              iconName,
-			IconSource:            iconSource,
+			RootPath: r.RootPath,
 		},
 	)
 }
@@ -100,13 +102,43 @@ func (r *Resource) PathFilters() []PathFilter {
 	return filters
 }
 
-func loadIcon(name string) (string, string) {
-	source, err := icon.LoadIcon(name)
-	if err != nil {
-		return name, ""
+func getBreadcrumb(rootPath ResourceLink, objectTitle string, objectUrl string, namespace string) []component.TitleComponent {
+	var rootUrl = rootPath.Url
+	if strings.Contains(rootPath.Url, "($NAMESPACE)") {
+		rootUrl = strings.Replace(rootPath.Url, "($NAMESPACE)", namespace, 1)
+	}
+	var title []component.TitleComponent
+	if len(rootUrl) > 0 {
+		title = append(title, component.NewLink("", rootPath.Title, rootUrl))
+	}
+	title = append(title, component.NewLink("", objectTitle, objectUrl))
+	return title
+}
+
+//
+func getCrdTitle(namespace string, crd *unstructured.Unstructured, objectName string) []component.TitleComponent {
+	var title []component.TitleComponent
+	if namespace == "" {
+		title = component.Title(component.NewLink("", "Cluster Overview", "/cluster-overview"),
+			component.NewLink("", "Custom Resources", "/cluster-overview/custom-resources"))
+	} else {
+		title = component.Title(component.NewLink("", "Overview", "/overview/namespace/"+namespace),
+			component.NewLink("", "Custom Resources", "/overview/namespace/"+namespace+"/custom-resources"))
 	}
 
-	internalName := fmt.Sprintf("internal:%s", name)
+	if objectName == "" {
+		title = append(title, component.NewText(crd.GetName()))
+	} else {
+		title = append(title, component.NewLink("", crd.GetName(), getCrdUrl(namespace, crd)))
+		title = append(title, component.NewText(objectName))
+	}
+	return title
+}
 
-	return internalName, source
+func getCrdUrl(namespace string, crd *unstructured.Unstructured) string {
+	ref := path.Join("/overview/namespace", namespace, "custom-resources", crd.GetName())
+	if namespace == "" {
+		ref = path.Join("/cluster-overview/custom-resources", crd.GetName())
+	}
+	return ref
 }

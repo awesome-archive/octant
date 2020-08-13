@@ -1,10 +1,12 @@
-# Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+# Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 # ------------------------------------------------------------------------------
 # Build web assets
 # ------------------------------------------------------------------------------
-FROM node:10.15.3 as base
+ARG NODE_VERSION
+
+FROM node:$NODE_VERSION as base
 
 ADD web/ /web
 WORKDIR /web
@@ -15,16 +17,17 @@ RUN npm ci --prefer-offline && npm run-script build
 # ------------------------------------------------------------------------------
 # Install go tools and build binary
 # ------------------------------------------------------------------------------
-FROM golang:1.12 as builder
+FROM golang:1.13 as builder
 
 WORKDIR /workspace
 ADD . /workspace
 COPY --from=base /web ./web
 ENV GOFLAGS=-mod=vendor GO111MODULE=on
 
-RUN make go-install
+RUN go run build.go go-install
+RUN go generate ./pkg/icon
 RUN go generate ./web
-RUN make octant-dev
+RUN go run build.go build
 
 # ------------------------------------------------------------------------------
 # Running container

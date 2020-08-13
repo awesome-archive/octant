@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -28,32 +30,34 @@ type InputChoice struct {
 	Checked bool   `json:"checked"`
 }
 
-type baseFormField struct {
+type BaseFormField struct {
 	label     string
 	name      string
 	fieldType string
 }
 
-func newBaseFormField(label, name, fieldType string) *baseFormField {
-	return &baseFormField{
+func newBaseFormField(label, name, fieldType string) *BaseFormField {
+	return &BaseFormField{
 		label:     label,
 		name:      name,
 		fieldType: fieldType,
 	}
 }
 
-func (bff *baseFormField) Label() string {
+func (bff *BaseFormField) Label() string {
 	return bff.label
 }
 
-func (bff *baseFormField) Name() string {
+func (bff *BaseFormField) Name() string {
 	return bff.name
 }
 
-func (bff *baseFormField) Type() string {
+func (bff *BaseFormField) Type() string {
 	return bff.fieldType
 }
 
+// FormField is a form field interface.
+// TODO: make this more json friendly by converting it to a struct.
 type FormField interface {
 	Label() string
 	Name() string
@@ -79,7 +83,7 @@ func marshalFormField(ff FormField) ([]byte, error) {
 }
 
 type FormFieldCheckBox struct {
-	*baseFormField
+	*BaseFormField
 
 	choices []InputChoice
 }
@@ -92,7 +96,7 @@ var _ FormField = (*FormFieldCheckBox)(nil)
 
 func NewFormFieldCheckBox(label, name string, choices []InputChoice) *FormFieldCheckBox {
 	return &FormFieldCheckBox{
-		baseFormField: newBaseFormField(label, name, FieldTypeCheckBox),
+		BaseFormField: newBaseFormField(label, name, FieldTypeCheckBox),
 		choices:       choices,
 	}
 }
@@ -128,21 +132,21 @@ func (ff *FormFieldCheckBox) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	ff.baseFormField = newBaseFormField(x.Label, x.Name, x.Type)
+	ff.BaseFormField = newBaseFormField(x.Label, x.Name, x.Type)
 	ff.choices = x.Configuration.Choices
 
 	return nil
 }
 
 type FormFieldRadio struct {
-	*baseFormField
+	*BaseFormField
 
 	choices []InputChoice
 }
 
 func NewFormFieldRadio(label, name string, choices []InputChoice) *FormFieldRadio {
 	return &FormFieldRadio{
-		baseFormField: newBaseFormField(label, name, FieldTypeRadio),
+		BaseFormField: newBaseFormField(label, name, FieldTypeRadio),
 		choices:       choices,
 	}
 }
@@ -185,7 +189,7 @@ func (ff *FormFieldRadio) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	ff.baseFormField = newBaseFormField(x.Label, x.Name, x.Type)
+	ff.BaseFormField = newBaseFormField(x.Label, x.Name, x.Type)
 	ff.choices = x.Configuration.Choices
 
 	return nil
@@ -196,14 +200,14 @@ func (ff *FormFieldRadio) MarshalJSON() ([]byte, error) {
 }
 
 type FormFieldText struct {
-	*baseFormField
+	*BaseFormField
 
 	value string
 }
 
 func NewFormFieldText(label, name, value string) *FormFieldText {
 	return &FormFieldText{
-		baseFormField: newBaseFormField(label, name, FieldTypeText),
+		BaseFormField: newBaseFormField(label, name, FieldTypeText),
 		value:         value,
 	}
 }
@@ -235,7 +239,7 @@ func (ff *FormFieldText) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	ff.baseFormField = newBaseFormField(x.Label, x.Name, x.Type)
+	ff.BaseFormField = newBaseFormField(x.Label, x.Name, x.Type)
 	ff.value = x.Value
 
 	return nil
@@ -243,14 +247,14 @@ func (ff *FormFieldText) UnmarshalJSON(data []byte) error {
 }
 
 type FormFieldPassword struct {
-	*baseFormField
+	*BaseFormField
 
 	value string
 }
 
 func NewFormFieldPassword(label, name, value string) *FormFieldPassword {
 	return &FormFieldPassword{
-		baseFormField: newBaseFormField(label, name, FieldTypePassword),
+		BaseFormField: newBaseFormField(label, name, FieldTypePassword),
 		value:         value,
 	}
 }
@@ -282,21 +286,21 @@ func (ff *FormFieldPassword) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	ff.baseFormField = newBaseFormField(x.Label, x.Name, x.Type)
+	ff.BaseFormField = newBaseFormField(x.Label, x.Name, x.Type)
 	ff.value = x.Value
 
 	return nil
 }
 
 type FormFieldNumber struct {
-	*baseFormField
+	*BaseFormField
 
 	value string
 }
 
 func NewFormFieldNumber(label, name, value string) *FormFieldNumber {
 	return &FormFieldNumber{
-		baseFormField: newBaseFormField(label, name, FieldTypeNumber),
+		BaseFormField: newBaseFormField(label, name, FieldTypeNumber),
 		value:         value,
 	}
 }
@@ -328,14 +332,14 @@ func (ff *FormFieldNumber) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	ff.baseFormField = newBaseFormField(x.Label, x.Name, x.Type)
+	ff.BaseFormField = newBaseFormField(x.Label, x.Name, x.Type)
 	ff.value = x.Value
 
 	return nil
 }
 
 type FormFieldSelect struct {
-	*baseFormField
+	*BaseFormField
 
 	choices  []InputChoice
 	multiple bool
@@ -343,7 +347,7 @@ type FormFieldSelect struct {
 
 func NewFormFieldSelect(label, name string, choices []InputChoice, multiple bool) *FormFieldSelect {
 	return &FormFieldSelect{
-		baseFormField: newBaseFormField(label, name, FieldTypeSelect),
+		BaseFormField: newBaseFormField(label, name, FieldTypeSelect),
 		choices:       choices,
 		multiple:      multiple,
 	}
@@ -396,7 +400,7 @@ func (ff *FormFieldSelect) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	ff.baseFormField = newBaseFormField(x.Label, x.Name, x.Type)
+	ff.BaseFormField = newBaseFormField(x.Label, x.Name, x.Type)
 	ff.choices = x.Configuration.Choices
 	ff.multiple = x.Configuration.Multiple
 
@@ -404,14 +408,14 @@ func (ff *FormFieldSelect) UnmarshalJSON(data []byte) error {
 }
 
 type FormFieldTextarea struct {
-	*baseFormField
+	*BaseFormField
 
 	value string
 }
 
 func NewFormFieldTextarea(label, name, value string) *FormFieldTextarea {
 	return &FormFieldTextarea{
-		baseFormField: newBaseFormField(label, name, FieldTypeTextarea),
+		BaseFormField: newBaseFormField(label, name, FieldTypeTextarea),
 		value:         value,
 	}
 }
@@ -443,7 +447,7 @@ func (ff *FormFieldTextarea) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	ff.baseFormField = newBaseFormField(x.Label, x.Name, x.Type)
+	ff.BaseFormField = newBaseFormField(x.Label, x.Name, x.Type)
 	ff.value = x.Value
 
 	return nil
@@ -451,13 +455,13 @@ func (ff *FormFieldTextarea) UnmarshalJSON(data []byte) error {
 
 func NewFormFieldHidden(name, value string) *FormFieldHidden {
 	return &FormFieldHidden{
-		baseFormField: newBaseFormField("", name, FieldTypeHidden),
+		BaseFormField: newBaseFormField("", name, FieldTypeHidden),
 		value:         value,
 	}
 }
 
 type FormFieldHidden struct {
-	*baseFormField
+	*BaseFormField
 
 	value string
 }
@@ -489,7 +493,7 @@ func (ff *FormFieldHidden) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	ff.baseFormField = newBaseFormField(x.Label, x.Name, x.Type)
+	ff.BaseFormField = newBaseFormField(x.Label, x.Name, x.Type)
 	ff.value = x.Value
 
 	return nil
@@ -573,4 +577,27 @@ func (f *Form) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+// CreateFormForObject creates a form for an object with additional fields.
+func CreateFormForObject(actionName string, object runtime.Object, fields ...FormField) (Form, error) {
+	if object == nil {
+		return Form{}, errors.New("object is nil")
+	}
+
+	apiVersion, kind := object.GetObjectKind().GroupVersionKind().ToAPIVersionAndKind()
+	accessor, err := meta.Accessor(object)
+	if err != nil {
+		return Form{}, err
+	}
+
+	fields = append(fields,
+		NewFormFieldHidden("apiVersion", apiVersion),
+		NewFormFieldHidden("kind", kind),
+		NewFormFieldHidden("name", accessor.GetName()),
+		NewFormFieldHidden("namespace", accessor.GetNamespace()),
+		NewFormFieldHidden("action", actionName),
+	)
+
+	return Form{Fields: fields}, nil
 }

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -7,13 +7,15 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net"
 
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/pkg/plugin/api/proto"
+	"github.com/spf13/viper"
+
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
+
+	"github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/pkg/plugin/api/proto"
 )
 
 // API controlls the dashboard API service.
@@ -53,14 +55,16 @@ func (a *grpcAPI) Start(ctx context.Context) error {
 		service: a.Service,
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.MaxRecvMsgSize(viper.GetInt("client-max-recv-msg-size")),
+	)
+
 	proto.RegisterDashboardServer(s, dashboardServer)
 
 	logger.Debugf("dashboard plugin api is starting")
 	go func() {
 		if err := s.Serve(a.listener); err != nil {
-			fmt.Println("it broke?", err)
-			logger.Errorf("unable to serve GRPC: %v", err)
+			logger.WithErr(err).Errorf("unable to serve GRPC")
 			return
 		}
 	}()

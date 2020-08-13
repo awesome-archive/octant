@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -18,10 +18,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/clock"
 
-	"github.com/vmware/octant/internal/describer"
-	"github.com/vmware/octant/internal/testutil"
-	"github.com/vmware/octant/pkg/store"
-	storeFake "github.com/vmware/octant/pkg/store/fake"
+	"github.com/vmware-tanzu/octant/internal/describer"
+	internalErr "github.com/vmware-tanzu/octant/internal/errors"
+	"github.com/vmware-tanzu/octant/internal/testutil"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	storeFake "github.com/vmware-tanzu/octant/pkg/store/fake"
 )
 
 func createObject(name string) *unstructured.Unstructured {
@@ -60,7 +61,7 @@ func Test_loadObjects(t *testing.T) {
 
 				o.EXPECT().
 					List(gomock.Any(), gomock.Eq(key)).
-					Return(sampleObjects, nil)
+					Return(sampleObjects, false, nil)
 			},
 			fields:   map[string]string{},
 			keys:     []store.Key{{APIVersion: "v1", Kind: "kind"}},
@@ -77,7 +78,7 @@ func Test_loadObjects(t *testing.T) {
 
 				o.EXPECT().
 					List(gomock.Any(), gomock.Eq(key)).
-					Return(&unstructured.UnstructuredList{}, nil)
+					Return(&unstructured.UnstructuredList{}, false, nil)
 
 			},
 			fields:   map[string]string{"name": "name"},
@@ -94,7 +95,7 @@ func Test_loadObjects(t *testing.T) {
 
 				o.EXPECT().
 					List(gomock.Any(), gomock.Eq(key)).
-					Return(nil, errors.New("error"))
+					Return(nil, false, errors.New("error"))
 			},
 			fields: map[string]string{},
 			keys:   []store.Key{{APIVersion: "v1", Kind: "kind"}},
@@ -110,10 +111,13 @@ func Test_loadObjects(t *testing.T) {
 			o := storeFake.NewMockStore(controller)
 			tc.init(t, o)
 
+			errorStore, err := internalErr.NewErrorStore()
+			require.NoError(t, err)
+
 			namespace := "default"
 
 			ctx := context.Background()
-			got, err := describer.LoadObjects(ctx, o, namespace, tc.fields, tc.keys)
+			got, err := describer.LoadObjects(ctx, o, errorStore, namespace, tc.fields, tc.keys)
 			if tc.isErr {
 				require.Error(t, err)
 				return

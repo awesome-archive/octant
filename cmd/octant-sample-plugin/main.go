@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -13,12 +13,12 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin"
-	"github.com/vmware/octant/pkg/plugin/service"
-	"github.com/vmware/octant/pkg/store"
-	"github.com/vmware/octant/pkg/view/component"
-	"github.com/vmware/octant/pkg/view/flexlayout"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/pkg/plugin/service"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/view/flexlayout"
 )
 
 var pluginName = "plugin-name"
@@ -106,9 +106,14 @@ func handlePrint(request *service.PrintRequest) (plugin.PrintResponse, error) {
 		return plugin.PrintResponse{}, err
 	}
 
+	// The plugin can check if the object it requested exists.
+	if u == nil {
+		return plugin.PrintResponse{}, errors.New("object doesn't exist")
+	}
+
 	// Octant has a component library that can be used to build content for a plugin.
 	// In this case, the plugin is creating a card.
-	podCard := component.NewCard(fmt.Sprintf("Extra Output for %s", u.GetName()))
+	podCard := component.NewCard(component.TitleFromString(fmt.Sprintf("Extra Output for %s", u.GetName())))
 	podCard.SetBody(component.NewMarkdownText("This output was generated from _octant-sample-plugin_"))
 
 	msg := fmt.Sprintf("update from plugin at %s", time.Now().Format(time.RFC3339))
@@ -167,7 +172,7 @@ func handleNavigation(request *service.NavigationRequest) (navigation.Navigation
 func initRoutes(router *service.Router) {
 	gen := func(name, accessor, requestPath string) component.Component {
 		cardBody := component.NewText(fmt.Sprintf("hello from plugin: path %s", requestPath))
-		card := component.NewCard(fmt.Sprintf("My Card - %s", name))
+		card := component.NewCard(component.TitleFromString(fmt.Sprintf("My Card - %s", name)))
 		card.SetBody(cardBody)
 		cardList := component.NewCardList(name)
 		cardList.AddCard(*card)
@@ -176,10 +181,10 @@ func initRoutes(router *service.Router) {
 		return cardList
 	}
 
-	router.HandleFunc("/*", func(request *service.Request) (component.ContentResponse, error) {
+	router.HandleFunc("*", func(request service.Request) (component.ContentResponse, error) {
 		// For each page, generate two tabs with a some content.
-		component1 := gen("Tab 1", "tab1", request.Path)
-		component2 := gen("Tab 2", "tab2", request.Path)
+		component1 := gen("Tab 1", "tab1", request.Path())
+		component2 := gen("Tab 2", "tab2", request.Path())
 
 		contentResponse := component.NewContentResponse(component.TitleFromString("Example"))
 		contentResponse.Add(component1, component2)

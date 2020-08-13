@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -25,7 +25,7 @@ func Test_Selectors_Marshal(t *testing.T) {
 		{
 			name: "general",
 			input: &Selectors{
-				base: newBase(typeSelectors, TitleFromString("my summary")),
+				Base: newBase(TypeSelectors, TitleFromString("my summary")),
 				Config: SelectorsConfig{
 					Selectors: []Selector{
 						&LabelSelector{

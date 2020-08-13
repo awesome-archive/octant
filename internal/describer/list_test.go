@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -15,13 +15,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	configFake "github.com/vmware/octant/internal/config/fake"
-	printerFake "github.com/vmware/octant/internal/modules/overview/printer/fake"
-	"github.com/vmware/octant/internal/testutil"
-	"github.com/vmware/octant/pkg/plugin"
-	pluginFake "github.com/vmware/octant/pkg/plugin/fake"
-	"github.com/vmware/octant/pkg/store"
-	"github.com/vmware/octant/pkg/view/component"
+	configFake "github.com/vmware-tanzu/octant/internal/config/fake"
+	printerFake "github.com/vmware-tanzu/octant/internal/printer/fake"
+	"github.com/vmware-tanzu/octant/internal/testutil"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 func TestListDescriber(t *testing.T) {
@@ -40,17 +38,12 @@ func TestListDescriber(t *testing.T) {
 	namespace := "default"
 
 	dashConfig := configFake.NewMockDash(controller)
-	moduleRegistrar := pluginFake.NewMockModuleRegistrar(controller)
-	actionRegistrar := pluginFake.NewMockActionRegistrar(controller)
-
-	pluginManager := plugin.NewManager(nil, moduleRegistrar, actionRegistrar)
-	dashConfig.EXPECT().PluginManager().Return(pluginManager)
 
 	podListTable := createPodTable(*pod)
 
 	objectPrinter := printerFake.NewMockPrinter(controller)
 	podList := &corev1.PodList{Items: []corev1.Pod{*pod}}
-	objectPrinter.EXPECT().Print(gomock.Any(), podList, pluginManager).Return(podListTable, nil)
+	objectPrinter.EXPECT().Print(gomock.Any(), podList).Return(podListTable, nil)
 
 	options := Options{
 		Dash:    dashConfig,
@@ -64,22 +57,19 @@ func TestListDescriber(t *testing.T) {
 		Path:          thePath,
 		Title:         "list",
 		StoreKey:      key,
-		ListType:      podListType,
-		ObjectType:    podObjectType,
+		ListType:      PodListType,
+		ObjectType:    PodObjectType,
 		IsClusterWide: false,
-		IconName:      "icon-name",
-		IconSource:    "icon-source",
 	}
 	d := NewList(listConfig)
-	cResponse, err := d.Describe(ctx, "/path", namespace, options)
+	cResponse, err := d.Describe(ctx, namespace, options)
 	require.NoError(t, err)
 
-	list := component.NewList("list", nil)
+	list := component.NewList(append([]component.TitleComponent{}, component.NewText("list")), nil)
 	list.Add(podListTable)
-	list.SetIcon("icon-name", "icon-source")
 	expected := component.ContentResponse{
 		Components: []component.Component{list},
 	}
 
-	assert.Equal(t, expected, cResponse)
+	assert.Equal(t, expected.Title, cResponse.Title)
 }

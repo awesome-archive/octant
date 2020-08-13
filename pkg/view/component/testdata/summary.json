@@ -9,6 +9,10 @@
     ]
   },
   "config": {
+    "alert": {
+      "message": "info",
+      "type": "info"
+    },
     "sections": [
       {
         "header": "Containers",
@@ -52,9 +56,7 @@
                   "value": "80/TCP"
                 }
               }
-            ],
-            "iconName": "",
-            "iconSource": ""
+            ]
           }
         }
       },

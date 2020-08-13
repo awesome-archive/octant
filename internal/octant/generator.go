@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-//go:generate mockgen -destination=./fake/mock_generator.go -package=fake github.com/vmware/octant/internal/octant Generator
+//go:generate mockgen -destination=./fake/mock_generator.go -package=fake github.com/vmware-tanzu/octant/internal/octant Generator
 
 // Generator generates events.
 type Generator interface {

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -73,7 +73,7 @@ func Test_ResourceViewer_Marshal(t *testing.T) {
 						},
 					},
 				},
-				base: newBase(typeResourceViewer, TitleFromString("Resource Viewer")),
+				Base: newBase(TypeResourceViewer, TitleFromString("Resource Viewer")),
 			},
 			expectedPath: "resource_viewer.json",
 		},
@@ -126,7 +126,6 @@ func Test_ResourceViewer_AddEdge_missing_node(t *testing.T) {
 
 	node := Node{}
 	rv.AddNode("nodeID", node)
-
 
 	require.Error(t, rv.AddEdge("nodeID", "childID", EdgeTypeExplicit))
 }

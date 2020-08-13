@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -14,11 +14,19 @@ import (
 	"github.com/davecgh/go-spew/spew"
 )
 
+// TableFilter describer a text filter for a table.
+type TableFilter struct {
+	Values   []string `json:"values"`
+	Selected []string `json:"selected"`
+}
+
 // TableConfig is the contents of a Table
 type TableConfig struct {
-	Columns      []TableCol `json:"columns"`
-	Rows         []TableRow `json:"rows"`
-	EmptyContent string     `json:"emptyContent"`
+	Columns      []TableCol             `json:"columns"`
+	Rows         []TableRow             `json:"rows"`
+	EmptyContent string                 `json:"emptyContent"`
+	Loading      bool                   `json:"loading"`
+	Filters      map[string]TableFilter `json:"filters"`
 }
 
 // TableCol describes a column from a table. Accessor is the key this
@@ -30,6 +38,17 @@ type TableCol struct {
 
 // TableRow is a row in table. Each key->value represents a particular column in the row.
 type TableRow map[string]Component
+
+func (t TableRow) AddAction(gridAction GridAction) {
+	ga, ok := t[GridActionKey].(*GridActions)
+	if !ok {
+		ga = NewGridActions()
+	}
+
+	ga.AddGridAction(gridAction)
+
+	t[GridActionKey] = ga
+}
 
 func (t *TableRow) UnmarshalJSON(data []byte) error {
 	*t = make(TableRow)
@@ -53,26 +72,30 @@ func (t *TableRow) UnmarshalJSON(data []byte) error {
 }
 
 // Table contains other Components
+//
+// +octant:component
 type Table struct {
-	base
+	Base
 	Config TableConfig `json:"config"`
 
 	mu sync.Mutex
 }
 
 // NewTable creates a table component
-func NewTable(title string, cols []TableCol) *Table {
+func NewTable(title, placeholder string, cols []TableCol) *Table {
 	return &Table{
-		base: newBase(typeTable, TitleFromString(title)),
+		Base: newBase(TypeTable, TitleFromString(title)),
 		Config: TableConfig{
-			Columns: cols,
+			Columns:      cols,
+			EmptyContent: placeholder,
+			Filters:      make(map[string]TableFilter),
 		},
 	}
 }
 
 // NewTableWithRows creates a table with rows.
-func NewTableWithRows(title string, cols []TableCol, rows []TableRow) *Table {
-	table := NewTable(title, cols)
+func NewTableWithRows(title, placeholder string, cols []TableCol, rows []TableRow) *Table {
+	table := NewTable(title, placeholder, cols)
 	table.Add(rows...)
 	return table
 }
@@ -95,14 +118,18 @@ func NewTableCols(keys ...string) []TableCol {
 
 // IsEmpty returns true if there is one or more rows.
 func (t *Table) IsEmpty() bool {
-	return len(t.Config.Rows) < 1
+	return len(t.Config.Rows) == 0
+}
+
+func (t *Table) SetPlaceholder(placeholder string) {
+	t.Config.EmptyContent = placeholder
 }
 
 func (t *Table) Sort(name string, reverse bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	sort.Slice(t.Rows(), func(i, j int) bool {
+	sort.SliceStable(t.Rows(), func(i, j int) bool {
 		a, ok := t.Config.Rows[i][name]
 		if !ok {
 			spew.Dump(fmt.Sprintf("%s:%d/%d", name, i, j), t.Config.Rows)
@@ -143,6 +170,15 @@ func (t *Table) AddColumn(name string) {
 	})
 }
 
+// AddFilter adds a filter to the table. Each column can only have a
+// single filter.
+func (t *Table) AddFilter(columnName string, filter TableFilter) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.Config.Filters[columnName] = filter
+}
+
 // Columns returns the table columns.
 func (t *Table) Columns() []TableCol {
 	return t.Config.Columns
@@ -161,10 +197,18 @@ func (t *Table) MarshalJSON() ([]byte, error) {
 	defer t.mu.Unlock()
 
 	m := tableMarshal{
-		base:   t.base,
+		Base:   t.Base,
 		Config: t.Config,
 	}
 
-	m.Metadata.Type = typeTable
+	m.Metadata.Type = TypeTable
 	return json.Marshal(&m)
+}
+
+func (t *Table) SetIsLoading(isLoading bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.Config.Loading = isLoading
+
 }

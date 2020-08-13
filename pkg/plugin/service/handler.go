@@ -7,10 +7,10 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/vmware/octant/pkg/action"
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/action"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 // Handler is the plugin service helper handler. Functions on this struct are called from Octant.
@@ -104,7 +104,7 @@ func (p *Handler) ObjectStatus(ctx context.Context, object runtime.Object) (plug
 }
 
 // HandleAction handles actions given a payload.
-func (p *Handler) HandleAction(ctx context.Context, payload action.Payload) error {
+func (p *Handler) HandleAction(ctx context.Context, actionName string, payload action.Payload) error {
 	if p.HandlerFuncs.HandleAction == nil {
 		return nil
 	}
@@ -112,6 +112,7 @@ func (p *Handler) HandleAction(ctx context.Context, payload action.Payload) erro
 	request := &ActionRequest{
 		baseRequest:     newBaseRequest(ctx, p.name),
 		DashboardClient: p.dashboardClient,
+		ActionName:      actionName,
 		Payload:         payload,
 	}
 
@@ -139,10 +140,10 @@ func (p *Handler) Content(ctx context.Context, contentPath string) (component.Co
 		return component.ContentResponse{}, nil
 	}
 
-	request := &Request{
+	request := &request{
 		baseRequest:     newBaseRequest(ctx, p.name),
 		dashboardClient: p.dashboardClient,
-		Path:            contentPath,
+		path:            contentPath,
 	}
 
 	return handlerFunc(request)

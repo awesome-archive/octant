@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -11,7 +11,7 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/internal/gvk"
 )
 
 var (
@@ -25,8 +25,10 @@ var (
 		gvk.Pod,
 		gvk.ReplicationController,
 		gvk.StatefulSet,
+		gvk.HorizontalPodAutoscaler,
 		gvk.Ingress,
 		gvk.Service,
+		gvk.NetworkPolicy,
 		gvk.ConfigMap,
 		gvk.Secret,
 		gvk.PersistentVolumeClaim,
@@ -37,12 +39,12 @@ var (
 	}
 )
 
-func crdPath(namespace, crdName, name string) (string, error) {
+func crdPath(namespace, crdName, version, name string) (string, error) {
 	if namespace == "" {
 		return "", errors.Errorf("unable to create CRD path for %s due to missing namespace", crdName)
 	}
 
-	return path.Join("/content/overview/namespace", namespace, "custom-resources", crdName, name), nil
+	return path.Join("/overview/namespace", namespace, "custom-resources", crdName, version, name), nil
 }
 
 func gvkPath(namespace, apiVersion, kind, name string) (string, error) {
@@ -79,10 +81,14 @@ func gvkPath(namespace, apiVersion, kind, name string) (string, error) {
 		p = "/config-and-storage/persistent-volume-claims"
 	case apiVersion == "v1" && kind == "ServiceAccount":
 		p = "/config-and-storage/service-accounts"
+	case (apiVersion == "autoscaling/v1" || apiVersion == "autoscaling/v2beta2") && kind == "HorizontalPodAutoscaler":
+		p = "/discovery-and-load-balancing/horizontal-pod-autoscalers"
 	case apiVersion == "extensions/v1beta1" && kind == "Ingress":
 		p = "/discovery-and-load-balancing/ingresses"
 	case apiVersion == "v1" && kind == "Service":
 		p = "/discovery-and-load-balancing/services"
+	case apiVersion == "networking.k8s.io/v1" && kind == "NetworkPolicy":
+		p = "/discovery-and-load-balancing/network-policies"
 	case apiVersion == "rbac.authorization.k8s.io/v1" && kind == "Role":
 		p = "/rbac/roles"
 	case apiVersion == "rbac.authorization.k8s.io/v1" && kind == "RoleBinding":
@@ -95,5 +101,5 @@ func gvkPath(namespace, apiVersion, kind, name string) (string, error) {
 		return "", errors.Errorf("unknown object %s %s", apiVersion, kind)
 	}
 
-	return path.Join("/content/overview/namespace", namespace, p, name), nil
+	return path.Join("/overview/namespace", namespace, p, name), nil
 }

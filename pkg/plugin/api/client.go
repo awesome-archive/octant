@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -11,13 +11,13 @@ import (
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/pkg/plugin/api/proto"
-	"github.com/vmware/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/pkg/plugin/api/proto"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
 
-//go:generate mockgen -source=proto/dashboard.pb.go -destination=./fake/mock_dashboard_client.go -package=fake github.com/vmware/octant/pkg/plugin/api/proto DashboardClient
-//go:generate mockgen -source=client.go -destination=./fake/mock_dashboard_connection.go -package=fake github.com/vmware/octant/pkg/plugin/api DashboardConnection
+//go:generate mockgen -destination=./fake/mock_dashboard_client.go -package=fake github.com/vmware-tanzu/octant/pkg/plugin/api/proto DashboardClient
+//go:generate mockgen -destination=./fake/mock_dashboard_connection.go -package=fake github.com/vmware-tanzu/octant/pkg/plugin/api DashboardConnection
 
 type DashboardConnection interface {
 	Close() error
@@ -43,7 +43,6 @@ type ClientOption func(c *Client)
 // Client is a dashboard service API client.
 type Client struct {
 	DashboardConnection DashboardConnection
-	// dashboardClientFactory DashboardClientFactory
 }
 
 var _ Service = (*Client)(nil)
@@ -139,6 +138,24 @@ func (c *Client) Update(ctx context.Context, object *unstructured.Unstructured) 
 	return err
 }
 
+func (c *Client) Create(ctx context.Context, object *unstructured.Unstructured) error {
+	client := c.DashboardConnection.Client()
+
+	data, err := convertFromObject(object)
+	if err != nil {
+		return err
+	}
+
+	req := &proto.CreateRequest{
+		Object: data,
+	}
+
+	_, err = client.Create(ctx, req)
+
+	return err
+
+}
+
 // PortForward creates a port forward.
 func (c *Client) PortForward(ctx context.Context, req PortForwardRequest) (PortForwardResponse, error) {
 	client := c.DashboardConnection.Client()
@@ -173,6 +190,20 @@ func (c *Client) CancelPortForward(ctx context.Context, id string) {
 		logger := log.From(ctx)
 		logger.Errorf("unable to cancel port forward: %v", err)
 	}
+}
+
+// ListNamespaces lists namespaces.
+func (c *Client) ListNamespaces(ctx context.Context) (NamespacesResponse, error) {
+	client := c.DashboardConnection.Client()
+
+	resp, err := client.ListNamespaces(ctx, &proto.Empty{})
+	if err != nil {
+		return NamespacesResponse{}, err
+	}
+
+	return NamespacesResponse{
+		Namespaces: resp.Namespaces,
+	}, nil
 }
 
 // ForceFrontendUpdate forces the frontend to update itself.

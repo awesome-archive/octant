@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -20,14 +20,17 @@ type YAMLConfig struct {
 	Data string `json:"data,omitempty"`
 }
 
+// YAML is a YAML component.
+//
+// +octant:component
 type YAML struct {
-	base
+	Base
 	Config YAMLConfig `json:"config,omitempty"`
 }
 
 func NewYAML(title []TitleComponent, data string) *YAML {
 	return &YAML{
-		base: newBase(typeYAML, title),
+		Base: newBase(TypeYAML, title),
 		Config: YAMLConfig{
 			Data: data,
 		},
@@ -59,6 +62,6 @@ type yamlMarshal YAML
 
 func (y *YAML) MarshalJSON() ([]byte, error) {
 	m := yamlMarshal(*y)
-	m.Metadata.Type = typeYAML
+	m.Metadata.Type = TypeYAML
 	return json.Marshal(&m)
 }

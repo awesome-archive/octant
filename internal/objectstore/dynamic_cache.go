@@ -1,72 +1,99 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
 package objectstore
 
 import (
+	"bytes"
 	"context"
-	"os"
+	"errors"
+	"fmt"
+	"io"
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/yaml"
+
 	"go.opencensus.io/trace"
-	authorizationv1 "k8s.io/api/authorization/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	kLabels "k8s.io/apimachinery/pkg/labels"
 	kruntime "k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/informers"
 	kcache "k8s.io/client-go/tools/cache"
 	kretry "k8s.io/client-go/util/retry"
+	sigyaml "sigs.k8s.io/yaml"
 
-	"github.com/vmware/octant/internal/cluster"
-	"github.com/vmware/octant/internal/log"
-	"github.com/vmware/octant/internal/util/retry"
-	"github.com/vmware/octant/pkg/store"
+	"github.com/vmware-tanzu/octant/internal/cluster"
+	"github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
 
 const (
 	// defaultMutableResync is the resync period for informers.
 	defaultInformerResync = time.Second * 180
+
+	// initialInformerSyncTimeout
+	initialInformerSyncTimeout = time.Second * 10
 )
 
-func initDynamicSharedInformerFactory(ctx context.Context, client cluster.ClientInterface, namespace string) (dynamicinformer.DynamicSharedInformerFactory, error) {
-	dynamicClient, err := client.DynamicClient()
-	if err != nil {
-		return nil, err
-	}
-	return dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, defaultInformerResync, namespace, nil), nil
+func initInformerFactory(ctx context.Context, client cluster.ClientInterface, namespace string) (InformerFactory, error) {
+	return newInformerFactory(ctx.Done(), client, defaultInformerResync, namespace), nil
 }
-
-type accessKey struct {
-	Namespace string
-	Group     string
-	Resource  string
-	Verb      string
-}
-type accessMap map[accessKey]bool
 
 // DynamicCacheOpt is an option for configuration DynamicCache.
 type DynamicCacheOpt func(*DynamicCache)
 
+// Access sets the Resource Access cache for a DynamicCache.
+func Access(resourceAccess ResourceAccess) DynamicCacheOpt {
+	return func(dc *DynamicCache) {
+		dc.setResourceAccess(resourceAccess)
+	}
+}
+
 // DynamicCache is a cache based on the dynamic shared informer factory.
 type DynamicCache struct {
-	initFactoryFunc func(context.Context, cluster.ClientInterface, string) (dynamicinformer.DynamicSharedInformerFactory, error)
+	initFactoryFunc func(context.Context, cluster.ClientInterface, string) (InformerFactory, error)
 	factories       *factoriesCache
+	informerSynced  *informerSynced
+	backoffMap      sync.Map
 	client          cluster.ClientInterface
-	stopCh          <-chan struct{}
 	seenGVKs        *seenGVKsCache
-	access          *accessCache
+	access          ResourceAccess
 	updateFns       []store.UpdateFn
 	updateMu        sync.Mutex
 
-	useDynamicClient bool
+	syncTimeoutFunc func(context.Context, store.Key, chan bool)
+	waitForSyncFunc func(context.Context, store.Key, *DynamicCache, informers.GenericInformer, chan bool)
+}
+
+func syncTimeout(ctx context.Context, key store.Key, done chan bool) {
+	logger := log.From(ctx).With("key", key)
+	timer := time.NewTimer(initialInformerSyncTimeout)
+	select {
+	case <-timer.C:
+		logger.Debugf("cache has taken more than %s seconds to sync", initialInformerSyncTimeout)
+	case <-done:
+		timer.Stop()
+	}
+}
+
+func waitForSync(ctx context.Context, key store.Key, dc *DynamicCache, informer informers.GenericInformer, done chan bool) {
+	now := time.Now()
+	logger := log.From(ctx).With("key", key)
+	msg := "informer cache has synced"
+	kcache.WaitForCacheSync(ctx.Done(), informer.Informer().HasSynced)
+	<-time.After(100 * time.Millisecond)
+	logger.With("elapsed", time.Since(now)).
+		Debugf(msg)
+	dc.informerSynced.setSynced(key, true)
+	done <- true
 }
 
 var _ store.Store = (*DynamicCache)(nil)
@@ -74,19 +101,16 @@ var _ store.Store = (*DynamicCache)(nil)
 // NewDynamicCache creates an instance of DynamicCache.
 func NewDynamicCache(ctx context.Context, client cluster.ClientInterface, options ...DynamicCacheOpt) (*DynamicCache, error) {
 	c := &DynamicCache{
-		initFactoryFunc:  initDynamicSharedInformerFactory,
-		client:           client,
-		stopCh:           ctx.Done(),
-		seenGVKs:         initSeenGVKsCache(),
-		useDynamicClient: os.Getenv("OCTANT_USE_DYNAMIC_CLIENT") == "1",
+		initFactoryFunc: initInformerFactory,
+		syncTimeoutFunc: syncTimeout,
+		waitForSyncFunc: waitForSync,
+		client:          client,
+		seenGVKs:        initSeenGVKsCache(),
+		informerSynced:  initInformerSynced(),
 	}
 
 	for _, option := range options {
 		option(c)
-	}
-
-	if c.access == nil {
-		c.access = initAccessCache()
 	}
 
 	logger := log.From(ctx).With("component", "DynamicCache")
@@ -94,13 +118,9 @@ func NewDynamicCache(ctx context.Context, client cluster.ClientInterface, option
 	c.factories = initFactoriesCache()
 	go initStatusCheck(ctx.Done(), logger, c.factories)
 
-	if c.useDynamicClient {
-		logger.Debugf("using dynamic client instead of informer")
-	}
-
 	factory, err := c.initFactoryFunc(context.Background(), client, "")
 	if err != nil {
-		return nil, errors.Wrap(err, "initialize dynamic shared informer factory")
+		return nil, fmt.Errorf("initialize dynamic shared informer factory: %w", err)
 	}
 
 	c.factories.set("", factory)
@@ -112,126 +132,120 @@ type lister interface {
 	List(selector kLabels.Selector) ([]kruntime.Object, error)
 }
 
-func (dc *DynamicCache) fetchAccess(key accessKey, verb string) (bool, error) {
-	k8sClient, err := dc.client.KubernetesClient()
-	if err != nil {
-		return false, errors.Wrap(err, "client kubernetes")
-	}
-
-	authClient := k8sClient.AuthorizationV1()
-	sar := &authorizationv1.SelfSubjectAccessReview{
-		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Namespace: key.Namespace,
-				Group:     key.Group,
-				Resource:  key.Resource,
-				Verb:      verb,
-			},
-		},
-	}
-
-	review, err := authClient.SelfSubjectAccessReviews().Create(sar)
-	if err != nil {
-		return false, errors.Wrap(err, "client auth")
-	}
-	return review.Status.Allowed, nil
+func (dc *DynamicCache) setResourceAccess(resourceAccess ResourceAccess) {
+	dc.access = resourceAccess
 }
 
-// HasAccess returns an error if the current user does not have access to perform the verb action
-// for the given key.
-func (dc *DynamicCache) HasAccess(ctx context.Context, key store.Key, verb string) error {
-	_, span := trace.StartSpan(ctx, "dynamicCacheHasAccess")
-	defer span.End()
-
-	gvk := key.GroupVersionKind()
-
-	if gvk.GroupKind().Empty() {
-		return errors.Errorf("unable to check access for key %s", key.String())
-	}
-
-	gvr, err := dc.client.Resource(gvk.GroupKind())
-	if err != nil {
-		return errors.Wrap(err, "client resource")
-	}
-
-	aKey := accessKey{
-		Namespace: key.Namespace,
-		Group:     gvr.Group,
-		Resource:  gvr.Resource,
-		Verb:      verb,
-	}
-
-	access, ok := dc.access.get(aKey)
-
-	if !ok {
-		span.Annotate([]trace.Attribute{}, "fetch access start")
-		val, err := dc.fetchAccess(aKey, verb)
-		if err != nil {
-			return errors.Wrapf(err, "fetch access: %+v", aKey)
-		}
-
-		dc.access.set(aKey, val)
-		access = val
-		span.Annotate([]trace.Attribute{}, "fetch access finish")
-	}
-
-	if !access {
-		return errors.Errorf("denied %+v", aKey)
-	}
-
-	return nil
-}
-
-func (dc *DynamicCache) currentInformer(ctx context.Context, key store.Key) (informers.GenericInformer, error) {
+func (dc *DynamicCache) currentInformer(ctx context.Context, key store.Key) (informers.GenericInformer, bool, error) {
 	if dc.client == nil {
-		return nil, errors.New("cluster client is nil")
+		return nil, false, errors.New("cluster client is nil")
 	}
 
 	gvk := key.GroupVersionKind()
-	gvr, err := dc.client.Resource(gvk.GroupKind())
-	if err != nil {
-		return nil, errors.Wrap(err, "client resource")
-	}
-
 	factory, ok := dc.factories.get(key.Namespace)
 	if !ok {
-		if err := dc.HasAccess(ctx, store.Key{Namespace: metav1.NamespaceAll}, "watch"); err != nil {
+		if err := dc.access.HasAccess(ctx, store.Key{Namespace: metav1.NamespaceAll}, "watch"); err != nil {
 			factory, err = dc.initFactoryFunc(ctx, dc.client, key.Namespace)
 			if err != nil {
-				return nil, err
+				return nil, false, fmt.Errorf("check access watch all namespaces: %w", err)
 			}
 		} else {
 			factory, ok = dc.factories.get("")
 			if !ok {
-				return nil, errors.New("no default DynamicInformerFactory found")
+				return nil, false, errors.New("no default DynamicInformerFactory found")
 			}
 		}
 
 		dc.factories.set(key.Namespace, factory)
 	}
 
-	informer := factory.ForResource(gvr)
-	factory.Start(dc.stopCh)
-
-	if dc.seenGVKs.hasSeen(key.Namespace, gvk) {
-		return informer, nil
+	informer, err := factory.ForResource(gvk)
+	if err != nil {
+		return nil, false, fmt.Errorf("find informer for %s: %w", gvk, err)
 	}
 
+	dc.checkKeySynced(ctx, informer, key)
 	dc.seenGVKs.setSeen(key.Namespace, gvk, true)
 
-	return informer, nil
+	return informer, dc.informerSynced.hasSynced(key), nil
+}
+
+func (dc *DynamicCache) checkKeySynced(ctx context.Context, informer informers.GenericInformer, key store.Key) {
+	dc.updateMu.Lock()
+	defer dc.updateMu.Unlock()
+
+	if dc.seenGVKs.hasSeen(key.Namespace, key.GroupVersionKind()) ||
+		(dc.informerSynced.hasSeen(key) && dc.informerSynced.hasSynced(key)) {
+		return
+	}
+
+	done := make(chan bool, 1)
+	go dc.waitForSyncFunc(ctx, key, dc, informer, done)
+	go dc.syncTimeoutFunc(ctx, key, done)
+}
+
+// backoff returns the Duration of the next backoff. A duration of 0 is returned if
+// backoff is already waiting.
+func (dc *DynamicCache) backoff(ctx context.Context, key store.Key) time.Duration {
+	newEntry := newBackoffEntry(key, defaultBackoff)
+	actual, _ := dc.backoffMap.LoadOrStore(key.GroupVersionKind(), newEntry)
+	entry := actual.(backoffer)
+	if entry.isWaiting() {
+		return 0
+	}
+
+	entry.setWaiting(true)
+	dc.backoffMap.Store(key.GroupVersionKind(), entry)
+	t := entry.wait()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			logger := log.From(ctx)
+			defer func() {
+				entry.setWaiting(false)
+				dc.backoffMap.Store(key.GroupVersionKind(), entry)
+			}()
+			unwatchErr := dc.Unwatch(ctx, key.GroupVersionKind())
+			if unwatchErr != nil {
+				logger.Errorf("unwatch: %w", unwatchErr)
+			}
+			logger.Infof("backing off for %s (%s)", key.GroupVersionKind(), t)
+			<-time.After(t)
+		}
+	}()
+
+	return t
+}
+
+func (dc *DynamicCache) isBackingOff(ctx context.Context, key store.Key) bool {
+	actual, ok := dc.backoffMap.Load(key.GroupVersionKind())
+	if !ok {
+		return false
+	}
+	entry := actual.(backoffer)
+	return entry.isWaiting()
 }
 
 // List lists objects.
-func (dc *DynamicCache) List(ctx context.Context, key store.Key) (*unstructured.UnstructuredList, error) {
+func (dc *DynamicCache) List(ctx context.Context, key store.Key) (*unstructured.UnstructuredList, bool, error) {
 	ctx, span := trace.StartSpan(ctx, "dynamicCache:list")
 	defer span.End()
 
-	if err := dc.HasAccess(ctx, key, "list"); err != nil {
+	if dc.isBackingOff(ctx, key) {
+		return &unstructured.UnstructuredList{}, false, nil
+	}
+
+	if err := dc.access.HasAccess(ctx, key, "list"); err != nil {
 		if meta.IsNoMatchError(err) {
-			return &unstructured.UnstructuredList{}, nil
+			return &unstructured.UnstructuredList{}, false, nil
 		}
-		return nil, errors.Wrapf(err, "list access forbidden to %+v", key)
+		if !dc.isBackingOff(ctx, key) {
+			dc.backoff(ctx, key)
+		}
+		return nil, false, fmt.Errorf("check access to list %s: %w", key, err)
 	}
 
 	span.Annotate([]trace.Attribute{
@@ -240,20 +254,21 @@ func (dc *DynamicCache) List(ctx context.Context, key store.Key) (*unstructured.
 		trace.StringAttribute("kind", key.Kind),
 	}, "list key")
 
-	if dc.useDynamicClient {
-		return dc.listFromDynamicClient(ctx, key)
-	}
-
 	return dc.listFromInformer(ctx, key)
 }
 
-func (dc *DynamicCache) listFromInformer(ctx context.Context, key store.Key) (*unstructured.UnstructuredList, error) {
+func (dc *DynamicCache) listFromInformer(ctx context.Context, key store.Key) (*unstructured.UnstructuredList, bool, error) {
 	ctx, span := trace.StartSpan(ctx, "dynamicCache:list:informer")
 	defer span.End()
 
-	informer, err := dc.currentInformer(ctx, key)
+	informer, hasSynced, err := dc.currentInformer(ctx, key)
 	if err != nil {
-		return nil, errors.Wrapf(err, "retrieving informer for %+v", key)
+		return nil, false, fmt.Errorf("retrieving informer for %+v: %w", key, err)
+	}
+
+	if !hasSynced {
+		list, err := dc.listFromDynamicClient(ctx, key)
+		return list, false, err
 	}
 
 	var l lister
@@ -270,7 +285,7 @@ func (dc *DynamicCache) listFromInformer(ctx context.Context, key store.Key) (*u
 
 	objects, err := l.List(selector)
 	if err != nil {
-		return nil, errors.Wrapf(err, "listing %v", key)
+		return nil, false, fmt.Errorf("listing %v: %w", key, err)
 	}
 
 	list := &unstructured.UnstructuredList{}
@@ -278,7 +293,7 @@ func (dc *DynamicCache) listFromInformer(ctx context.Context, key store.Key) (*u
 		list.Items = append(list.Items, *objects[i].(*unstructured.Unstructured))
 	}
 
-	return list, nil
+	return list, !dc.informerSynced.hasSynced(key), nil
 }
 
 func (dc *DynamicCache) listFromDynamicClient(ctx context.Context, key store.Key) (*unstructured.UnstructuredList, error) {
@@ -295,7 +310,7 @@ func (dc *DynamicCache) listFromDynamicClient(ctx context.Context, key store.Key
 		return nil, err
 	}
 
-	gvr, err := dc.client.Resource(key.GroupVersionKind().GroupKind())
+	gvr, _, err := dc.client.Resource(key.GroupVersionKind().GroupKind())
 	if err != nil {
 		return nil, err
 	}
@@ -304,10 +319,10 @@ func (dc *DynamicCache) listFromDynamicClient(ctx context.Context, key store.Key
 		LabelSelector: selector.String(),
 	}
 	if key.Namespace == "" {
-		return dynamicClient.Resource(gvr).List(listOptions)
+		return dynamicClient.Resource(gvr).List(ctx, listOptions)
 	}
 
-	return dynamicClient.Resource(gvr).Namespace(key.Namespace).List(listOptions)
+	return dynamicClient.Resource(gvr).Namespace(key.Namespace).List(ctx, listOptions)
 }
 
 type getter interface {
@@ -319,8 +334,18 @@ func (dc *DynamicCache) Get(ctx context.Context, key store.Key) (*unstructured.U
 	ctx, span := trace.StartSpan(ctx, "dynamicCacheGet")
 	defer span.End()
 
-	if err := dc.HasAccess(ctx, key, "get"); err != nil {
-		return nil, errors.Wrapf(err, "get access forbidden to %+v", key)
+	if dc.isBackingOff(ctx, key) {
+		return &unstructured.Unstructured{}, nil
+	}
+
+	if err := dc.access.HasAccess(ctx, key, "get"); err != nil {
+		if meta.IsNoMatchError(err) {
+			return &unstructured.Unstructured{}, nil
+		}
+		if !dc.isBackingOff(ctx, key) {
+			dc.backoff(ctx, key)
+		}
+		return nil, fmt.Errorf("check access for get to %s: %w", key, err)
 	}
 
 	span.Annotate([]trace.Attribute{
@@ -330,20 +355,34 @@ func (dc *DynamicCache) Get(ctx context.Context, key store.Key) (*unstructured.U
 		trace.StringAttribute("name", key.Name),
 	}, "get key")
 
-	if dc.useDynamicClient {
-		return dc.getFromDynamicClient(ctx, key)
+	object, err := dc.getFromInformer(ctx, key)
+	if err != nil {
+		if kerrors.IsNotFound(err) {
+			object, err := dc.getFromDynamicClient(ctx, key)
+			if err != nil {
+				return nil, err
+			}
+			return object, nil
+		}
+
+		return nil, err
 	}
 
-	return dc.getFromInformer(ctx, key)
+	return object, nil
+
 }
 
 func (dc *DynamicCache) getFromInformer(ctx context.Context, key store.Key) (*unstructured.Unstructured, error) {
 	ctx, span := trace.StartSpan(ctx, "dynamicCache:get:informer")
 	defer span.End()
 
-	informer, err := dc.currentInformer(ctx, key)
+	informer, hasSynced, err := dc.currentInformer(ctx, key)
 	if err != nil {
-		return nil, errors.Wrapf(err, "retrieving informer for %v", key)
+		return nil, fmt.Errorf("retrieving informer for %v: %w", key, err)
+	}
+
+	if !hasSynced {
+		return dc.getFromDynamicClient(ctx, key)
 	}
 
 	var g getter
@@ -353,32 +392,10 @@ func (dc *DynamicCache) getFromInformer(ctx context.Context, key store.Key) (*un
 		g = informer.Lister().ByNamespace(key.Namespace)
 	}
 
-	var retryCount int64
-
-	var object kruntime.Object
-	retryErr := retry.Retry(3, time.Second, func() error {
-		object, err = g.Get(key.Name)
-		if err != nil {
-			if !kerrors.IsNotFound(err) {
-				retryCount++
-				return retry.Stop(errors.Wrap(err, "lister Get"))
-			}
-			return err
-		}
-
-		return nil
-	})
-
-	if retryCount > 0 {
-		span.Annotate([]trace.Attribute{
-			trace.Int64Attribute("retryCount", retryCount),
-		}, "get retried")
-	}
-
-	if retryErr != nil {
+	object, err := g.Get(key.Name)
+	if err != nil {
 		return nil, err
 	}
-
 	return object.(*unstructured.Unstructured), nil
 }
 
@@ -391,33 +408,96 @@ func (dc *DynamicCache) getFromDynamicClient(ctx context.Context, key store.Key)
 		return nil, err
 	}
 
-	gvr, err := dc.client.Resource(key.GroupVersionKind().GroupKind())
+	gvr, _, err := dc.client.Resource(key.GroupVersionKind().GroupKind())
 	if err != nil {
 		return nil, err
 	}
 
 	if key.Namespace == "" {
-		return dynamicClient.Resource(gvr).Get(key.Name, metav1.GetOptions{})
+		return dynamicClient.Resource(gvr).Get(ctx, key.Name, metav1.GetOptions{})
 	}
-	return dynamicClient.Resource(gvr).Namespace(key.Namespace).Get(key.Name, metav1.GetOptions{})
+	return dynamicClient.Resource(gvr).Namespace(key.Namespace).Get(ctx, key.Name, metav1.GetOptions{})
 }
 
 // Watch watches the cluster for an event and performs actions with the
 // supplied handler.
 func (dc *DynamicCache) Watch(ctx context.Context, key store.Key, handler kcache.ResourceEventHandler) error {
-	logger := log.From(ctx)
-	if err := dc.HasAccess(ctx, key, "watch"); err != nil {
-		logger.Errorf("check access failed: %v, access forbidden to %+v", key)
+	if dc.isBackingOff(ctx, key) {
 		return nil
 	}
 
-	informer, err := dc.currentInformer(ctx, key)
+	if err := dc.access.HasAccess(ctx, key, "watch"); err != nil {
+		if meta.IsNoMatchError(err) {
+			return nil
+		}
+		if !dc.isBackingOff(ctx, key) {
+			dc.backoff(ctx, key)
+		}
+		return fmt.Errorf("check access to watch %s: %w", key, err)
+	}
+
+	informer, _, err := dc.currentInformer(ctx, key)
 	if err != nil {
-		return errors.Wrapf(err, "retrieving informer for %s", key)
+		return fmt.Errorf("retrieving informer for %s: %w", key, err)
 	}
 
 	informer.Informer().AddEventHandler(handler)
 	return nil
+}
+
+// Unwatch un-watches a key by stopping it's informer.
+func (dc *DynamicCache) Unwatch(ctx context.Context, groupVersionKinds ...schema.GroupVersionKind) error {
+	for _, namespace := range dc.factories.keys() {
+		factory, ok := dc.factories.get(namespace)
+		if ok {
+			for _, groupVersionKind := range groupVersionKinds {
+				factory.Delete(groupVersionKind)
+			}
+		}
+	}
+
+	return nil
+}
+
+// Delete deletes an object from the cluster using a key.
+func (dc *DynamicCache) Delete(ctx context.Context, key store.Key) error {
+	_, span := trace.StartSpan(ctx, "dynamicCache:delete")
+	defer span.End()
+
+	if dc.isBackingOff(ctx, key) {
+		return nil
+	}
+
+	if err := dc.access.HasAccess(ctx, key, "delete"); err != nil {
+		if meta.IsNoMatchError(err) {
+			return nil
+		}
+		if !dc.isBackingOff(ctx, key) {
+			dc.backoff(ctx, key)
+		}
+		return fmt.Errorf("check access to delete %s: %w", key, err)
+	}
+
+	dynamicClient, err := dc.client.DynamicClient()
+	if err != nil {
+		return err
+	}
+
+	gvr, _, err := dc.client.Resource(key.GroupVersionKind().GroupKind())
+	if err != nil {
+		return err
+	}
+
+	deletePolicy := metav1.DeletePropagationForeground
+	deleteOptions := metav1.DeleteOptions{
+		PropagationPolicy: &deletePolicy,
+	}
+
+	if key.Namespace == "" {
+		return dynamicClient.Resource(gvr).Delete(ctx, key.Name, deleteOptions)
+	}
+
+	return dynamicClient.Resource(gvr).Namespace(key.Namespace).Delete(ctx, key.Name, deleteOptions)
 }
 
 // UpdateClusterClient updates the cluster client.
@@ -428,6 +508,9 @@ func (dc *DynamicCache) UpdateClusterClient(ctx context.Context, client cluster.
 	dc.updateMu.Lock()
 	dc.client = client
 	dc.factories.reset()
+	dc.seenGVKs.reset()
+	dc.informerSynced.reset()
+	dc.access = NewResourceAccess(client)
 	dc.updateMu.Unlock()
 
 	for _, fn := range dc.updateFns {
@@ -437,6 +520,8 @@ func (dc *DynamicCache) UpdateClusterClient(ctx context.Context, client cluster.
 	return nil
 }
 
+// RegisterOnUpdate registers a function that will be called when the store updates it's client.
+// TODO: investigate if this needed since object store isn't replaced, it's client is. (GH#496)
 func (dc *DynamicCache) RegisterOnUpdate(fn store.UpdateFn) {
 	dc.updateFns = append(dc.updateFns, fn)
 }
@@ -446,15 +531,33 @@ func (dc *DynamicCache) Update(ctx context.Context, key store.Key, updater func(
 		return errors.New("can't update object")
 	}
 
+	if dc.isBackingOff(ctx, key) {
+		return nil
+	}
+
+	if err := dc.access.HasAccess(ctx, key, "update"); err != nil {
+		if meta.IsNoMatchError(err) {
+			return nil
+		}
+		if !dc.isBackingOff(ctx, key) {
+			dc.backoff(ctx, key)
+		}
+		return fmt.Errorf("check access to update %s: %w", key, err)
+	}
+
 	err := kretry.RetryOnConflict(kretry.DefaultRetry, func() error {
 		object, err := dc.Get(ctx, key)
 		if err != nil {
 			return err
 		}
 
+		if object == nil {
+			return errors.New("object not found")
+		}
+
 		gvk := object.GroupVersionKind()
 
-		gvr, err := dc.client.Resource(gvk.GroupKind())
+		gvr, _, err := dc.client.Resource(gvk.GroupKind())
 		if err != nil {
 			return err
 		}
@@ -465,14 +568,184 @@ func (dc *DynamicCache) Update(ctx context.Context, key store.Key, updater func(
 		}
 
 		if err := updater(object); err != nil {
-			return errors.Wrap(err, "unable to update object")
+			return fmt.Errorf("unable to update object: %w", err)
 		}
 
 		client := dynamicClient.Resource(gvr).Namespace(object.GetNamespace())
 
-		_, err = client.Update(object, metav1.UpdateOptions{})
+		_, err = client.Update(ctx, object, metav1.UpdateOptions{})
 		return err
 	})
 
 	return err
+}
+
+func (dc *DynamicCache) IsLoading(ctx context.Context, key store.Key) bool {
+	return !dc.informerSynced.hasSynced(key)
+}
+
+// Create creates an object in the cluster.
+// Note: test coverage of DynamicCache is slim.
+func (dc *DynamicCache) Create(ctx context.Context, object *unstructured.Unstructured) error {
+	_, span := trace.StartSpan(ctx, "dynamicCache:create")
+	defer span.End()
+
+	key, err := store.KeyFromObject(object)
+	if err != nil {
+		return fmt.Errorf("key from object: %w", err)
+	}
+
+	if dc.isBackingOff(ctx, key) {
+		return nil
+	}
+
+	if err := dc.access.HasAccess(ctx, key, "create"); err != nil {
+		if meta.IsNoMatchError(err) {
+			return nil
+		}
+		if !dc.isBackingOff(ctx, key) {
+			dc.backoff(ctx, key)
+		}
+		return fmt.Errorf("check access to create %s: %w", key, err)
+	}
+
+	dynamicClient, err := dc.client.DynamicClient()
+	if err != nil {
+		return err
+	}
+
+	gvr, _, err := dc.client.Resource(key.GroupVersionKind().GroupKind())
+	if err != nil {
+		return err
+	}
+
+	createOptions := metav1.CreateOptions{}
+
+	if key.Namespace == "" {
+		_, err := dynamicClient.Resource(gvr).Create(ctx, object, createOptions)
+		return err
+	}
+
+	_, err = dynamicClient.Resource(gvr).Namespace(key.Namespace).Create(ctx, object, createOptions)
+	return err
+}
+
+func CreateOrUpdateFromHandler(
+	ctx context.Context, namespace, input string,
+	get func(context.Context, store.Key) (*unstructured.Unstructured, error),
+	create func(context.Context, *unstructured.Unstructured) error,
+	clusterClient cluster.ClientInterface,
+) ([]string, error) {
+	withDoc := func(cb func(doc map[string]interface{}) error) error {
+		d := yaml.NewYAMLOrJSONDecoder(bytes.NewBufferString(input), 4096)
+		for {
+			doc := map[string]interface{}{}
+			if err := d.Decode(&doc); err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return fmt.Errorf("unable to parse yaml: %w", err)
+			}
+			if len(doc) == 0 {
+				// skip empty documents
+				continue
+			}
+			if err := cb(doc); err != nil {
+				return err
+			}
+		}
+	}
+
+	logger := log.From(ctx)
+	var results []string
+	err := withDoc(func(doc map[string]interface{}) error {
+		logger.Debugf("apply resource %#v", doc)
+
+		unstructuredObj := &unstructured.Unstructured{Object: doc}
+		key, err := store.KeyFromObject(unstructuredObj)
+		if err != nil {
+			return err
+		}
+		gvr, namespaced, err := clusterClient.Resource(key.GroupVersionKind().GroupKind())
+		if err != nil {
+			return fmt.Errorf("unable to discover resource: %w", err)
+		}
+		if namespaced && key.Namespace == "" {
+			unstructuredObj.SetNamespace(namespace)
+			key.Namespace = namespace
+		}
+
+		if _, err := get(ctx, key); err != nil {
+			if !kerrors.IsNotFound(err) {
+				// unexpected error
+				return fmt.Errorf("unable to get resource: %w", err)
+			}
+
+			// create object
+			err := create(ctx, &unstructured.Unstructured{Object: doc})
+			if err != nil {
+				return fmt.Errorf("unable to create resource: %w", err)
+			}
+
+			result := fmt.Sprintf("Created %s (%s) %s", key.Kind, key.APIVersion, key.Name)
+			if namespaced {
+				result = fmt.Sprintf("%s in %s", result, key.Namespace)
+			}
+			results = append(results, result)
+
+			return nil
+		}
+
+		// update object
+		unstructuredYaml, err := sigyaml.Marshal(doc)
+		if err != nil {
+			return fmt.Errorf("unable to marshal resource as yaml: %w", err)
+		}
+		client, err := clusterClient.DynamicClient()
+		if err != nil {
+			return fmt.Errorf("unable to get dynamic client: %w", err)
+		}
+
+		withForce := true
+		if namespaced {
+			_, err = client.Resource(gvr).Namespace(key.Namespace).Patch(
+				ctx,
+				key.Name,
+				types.ApplyPatchType,
+				unstructuredYaml,
+				metav1.PatchOptions{FieldManager: "octant", Force: &withForce},
+			)
+			if err != nil {
+				return fmt.Errorf("unable to patch resource: %w", err)
+			}
+		} else {
+			_, err = client.Resource(gvr).Patch(
+				ctx,
+				key.Name,
+				types.ApplyPatchType,
+				unstructuredYaml,
+				metav1.PatchOptions{FieldManager: "octant", Force: &withForce},
+			)
+			if err != nil {
+				return fmt.Errorf("unable to patch resource: %w", err)
+			}
+		}
+
+		result := fmt.Sprintf("Updated %s (%s) %s", key.Kind, key.APIVersion, key.Name)
+		if namespaced {
+			result = fmt.Sprintf("%s in %s", result, key.Namespace)
+		}
+		results = append(results, result)
+
+		return nil
+	})
+	return results, err
+}
+
+// CreateOrUpdateFromYAML creates resources in the cluster from YAML input.
+// Resources are created in the order they are present in the YAML.
+// An error creating a resource halts resource creation.
+// A list of created resources is returned. You may have created resources AND a non-nil error.
+func (dc *DynamicCache) CreateOrUpdateFromYAML(ctx context.Context, namespace, input string) ([]string, error) {
+	return CreateOrUpdateFromHandler(ctx, namespace, input, dc.Get, dc.Create, dc.client)
 }

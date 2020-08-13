@@ -7,13 +7,26 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/internal/cluster/fake"
-	"github.com/vmware/octant/internal/gvk"
-	"github.com/vmware/octant/internal/testutil"
+	"github.com/vmware-tanzu/octant/internal/cluster/fake"
+	"github.com/vmware-tanzu/octant/internal/gvk"
+	"github.com/vmware-tanzu/octant/pkg/store"
 )
+
+func Test_informerSynced(t *testing.T) {
+	c := initInformerSynced()
+	key := store.Key{APIVersion: "apiVersion"}
+	otherKey := store.Key{APIVersion: "apiVersion2"}
+	require.True(t, c.hasSynced(key))
+
+	c.setSynced(key, true)
+	require.True(t, c.hasSynced(key))
+	require.True(t, c.hasSynced(otherKey))
+
+	c.setSynced(key, false)
+	require.False(t, c.hasSynced(key))
+}
 
 func Test_factoriesCache(t *testing.T) {
 	const namespaceName = "test"
@@ -21,17 +34,12 @@ func Test_factoriesCache(t *testing.T) {
 	controller := gomock.NewController(t)
 	defer controller.Finish()
 
-	dynamicClient := fake.NewMockDynamicInterface(controller)
-
 	client := fake.NewMockClientInterface(controller)
-	client.EXPECT().
-		DynamicClient().
-		Return(dynamicClient, nil)
 
 	c := initFactoriesCache()
 
 	ctx := context.Background()
-	factory, err := initDynamicSharedInformerFactory(ctx, client, namespaceName)
+	factory, err := initInformerFactory(ctx, client, namespaceName)
 	require.NoError(t, err)
 
 	c.set(namespaceName, factory)
@@ -43,23 +51,6 @@ func Test_factoriesCache(t *testing.T) {
 	c.delete(namespaceName)
 	_, isFound = c.get(namespaceName)
 	require.False(t, isFound)
-}
-
-func Test_accessCache(t *testing.T) {
-	c := initAccessCache()
-
-	key := accessKey{
-		Namespace: "test",
-		Group:     "group",
-		Resource:  "resource",
-		Verb:      "list",
-	}
-
-	c.set(key, true)
-
-	got, isFound := c.get(key)
-	require.True(t, isFound)
-	require.True(t, got)
 }
 
 func Test_seenGVKsCache(t *testing.T) {
@@ -102,34 +93,27 @@ func Test_seenGVKsCache(t *testing.T) {
 	}
 }
 
-func Test_cachedObjectsCache(t *testing.T) {
-	c := initCachedObjectsCache()
+func Test_informerContextCache(t *testing.T) {
+	c := initInformerContextCache()
 
-	pod := testutil.ToUnstructured(t, testutil.CreatePod("pod"))
-
-	c.update("test", gvk.Pod, pod)
-
-	items := c.list("test", gvk.Pod)
-	require.Equal(t, []*unstructured.Unstructured{pod}, items)
-
-	items = c.list("test", gvk.Deployment)
-	require.Empty(t, items)
-
-	items = c.list("other", gvk.Pod)
-	require.Empty(t, items)
-
-	c.delete("test", gvk.Pod, pod)
-
-	items = c.list("test", gvk.Pod)
-	require.Empty(t, items)
-}
-
-func Test_watchedGVKsCache(t *testing.T) {
-	c := initWatchedGVKsCache()
-
-	c.setWatched("test", gvk.Pod)
-	assert.True(t, c.isWatched("test", gvk.Pod))
-	assert.False(t, c.isWatched("test", gvk.Deployment))
-	assert.False(t, c.isWatched("other", gvk.Pod))
-
+	groupVersionKind1 := schema.GroupVersionKind{
+		Group:   "group",
+		Version: "version",
+		Kind:    "resource1",
+	}
+	groupVersionKind2 := schema.GroupVersionKind{
+		Group:   "group",
+		Version: "version",
+		Kind:    "resource2",
+	}
+	_ = c.addChild(groupVersionKind1)
+	assert.Len(t, c.cache, 1)
+	_ = c.addChild(groupVersionKind1)
+	assert.Len(t, c.cache, 1)
+	_ = c.addChild(groupVersionKind2)
+	assert.Len(t, c.cache, 2)
+	c.delete(groupVersionKind1)
+	assert.Len(t, c.cache, 1)
+	c.reset()
+	assert.Len(t, c.cache, 0)
 }

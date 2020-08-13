@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -8,26 +8,41 @@ package component
 import "encoding/json"
 
 // Link is a text component that contains a link.
+//
+// +octant:component
 type Link struct {
-	base
 	Config LinkConfig `json:"config"`
+	Base
 }
+
+var _ Component = &Link{}
 
 // LinkConfig is the contents of Link
 type LinkConfig struct {
 	Text string `json:"value"`
 	Ref  string `json:"ref"`
+	// Status sets the status of the component.
+	Status       TextStatus `json:"status,omitempty" tsType:"number"`
+	StatusDetail Component  `json:"statusDetail,omitempty"`
 }
 
+type LinkOption func(l *Link)
+
 // NewLink creates a link component
-func NewLink(title, s, ref string) *Link {
-	return &Link{
-		base: newBase(typeLink, TitleFromString(title)),
+func NewLink(title, s, ref string, options ...LinkOption) *Link {
+	l := &Link{
+		Base: newBase(TypeLink, TitleFromString(title)),
 		Config: LinkConfig{
 			Text: s,
 			Ref:  ref,
 		},
 	}
+
+	for _, option := range options {
+		option(l)
+	}
+
+	return l
 }
 
 // SupportsTitle designates this is a TextComponent.
@@ -48,12 +63,18 @@ func (t *Link) Ref() string {
 	return t.Config.Ref
 }
 
+// SetStatus sets the status of the text component.
+func (t *Link) SetStatus(status TextStatus, detail Component) {
+	t.Config.Status = status
+	t.Config.StatusDetail = detail
+}
+
 type linkMarshal Link
 
 // MarshalJSON implements json.Marshaler
 func (t *Link) MarshalJSON() ([]byte, error) {
 	m := linkMarshal(*t)
-	m.Metadata.Type = typeLink
+	m.Metadata.Type = TypeLink
 	return json.Marshal(&m)
 }
 

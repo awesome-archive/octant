@@ -9,6 +9,7 @@
     ]
   },
   "config": {
+    "filters": {},
     "columns": [
       {
         "name": "Name",
@@ -57,6 +58,7 @@
         }
       }
     ],
-    "emptyContent": ""
+    "emptyContent": "",
+    "loading": false
   }
 }

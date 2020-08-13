@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -10,9 +10,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/vmware/octant/pkg/navigation"
-	"github.com/vmware/octant/pkg/plugin/dashboard"
-	"github.com/vmware/octant/pkg/view/component"
+	"github.com/vmware-tanzu/octant/pkg/navigation"
+	"github.com/vmware-tanzu/octant/pkg/plugin/dashboard"
+	"github.com/vmware-tanzu/octant/pkg/view/component"
 )
 
 func convertToCapabilities(in *dashboard.RegisterResponse_Capabilities) Capabilities {
@@ -89,10 +89,9 @@ func convertToNavigation(in *dashboard.NavigationResponse_Navigation) navigation
 	}
 
 	out := navigation.Navigation{
-		Title:      in.Title,
-		Path:       in.Path,
-		IconName:   in.IconName,
-		IconSource: in.IconSource,
+		Title:    in.Title,
+		Path:     in.Path,
+		IconName: in.IconName,
 	}
 
 	for _, child := range in.Children {
@@ -105,10 +104,9 @@ func convertToNavigation(in *dashboard.NavigationResponse_Navigation) navigation
 
 func convertFromNavigation(in navigation.Navigation) dashboard.NavigationResponse_Navigation {
 	out := dashboard.NavigationResponse_Navigation{
-		Title:      in.Title,
-		Path:       in.Path,
-		IconName:   in.IconName,
-		IconSource: in.IconSource,
+		Title:    in.Title,
+		Path:     in.Path,
+		IconName: in.IconName,
 	}
 
 	for _, child := range in.Children {

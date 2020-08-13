@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -12,28 +12,22 @@ import (
 	golog "log"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog"
 
-	"github.com/vmware/octant/internal/dash"
-	"github.com/vmware/octant/internal/log"
+	"github.com/vmware-tanzu/octant/internal/config"
+	ocontext "github.com/vmware-tanzu/octant/internal/context"
+	"github.com/vmware-tanzu/octant/internal/log"
+	"github.com/vmware-tanzu/octant/pkg/dash"
 )
 
-func newOctantCmd() *cobra.Command {
-	var namespace string
-	var uiURL string
-	var kubeConfig string
-	var verboseLevel int
-	var enableOpenCensus bool
-	var initialContext string
-	var klogVerbosity int
-	var clientQPS float32
-	var clientBurst int
-
+func newOctantCmd(version string, gitCommit string, buildTime string) *cobra.Command {
 	octantCmd := &cobra.Command{
 		Use:   "octant",
 		Short: "octant kubernetes dashboard",
@@ -42,17 +36,26 @@ func newOctantCmd() *cobra.Command {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			// TODO enable support for klog
-
-			z, err := newZapLogger(verboseLevel)
-			if err != nil {
-				golog.Printf("failed to initialize logger: %v", err)
+			if err := bindViper(cmd); err != nil {
+				golog.Printf("unable to bind flags: %v", err)
 				os.Exit(1)
 			}
+
+			logLevel := 0
+			if viper.GetBool("verbose") {
+				logLevel = 1
+			}
+
+			z, err := log.Init(logLevel)
+			if err != nil {
+				golog.Printf("unable to initialize logger: %v", err)
+				os.Exit(1)
+			}
+
 			defer func() {
-				if zErr := z.Sync(); zErr != nil {
-					golog.Printf("unable to sync logger: %v", zErr)
-				}
+				// this fails, but it should be safe to ignore according
+				// to https://github.com/uber-go/zap/issues/328
+				_ = z.Sync()
 			}()
 
 			logger := log.Wrap(z.Sugar())
@@ -64,30 +67,64 @@ func newOctantCmd() *cobra.Command {
 
 			shutdownCh := make(chan bool, 1)
 
+			logger.Debugf("disable-open-browser: %s", viper.Get("disable-open-browser"))
+
+			if viper.GetString("kubeconfig") == "" {
+				viper.Set("kubeconfig", clientcmd.NewDefaultClientConfigLoadingRules().GetDefaultFilename())
+			}
+
 			go func() {
+				buildInfo := config.BuildInfo{
+					Version: version,
+					Commit:  gitCommit,
+					Time:    buildTime,
+				}
+
 				options := dash.Options{
-					EnableOpenCensus: enableOpenCensus,
-					KubeConfig:       kubeConfig,
-					Namespace:        namespace,
-					FrontendURL:      uiURL,
-					Context:          initialContext,
-					ClientQPS:        clientQPS,
-					ClientBurst:      clientBurst,
+					DisableClusterOverview: viper.GetBool("disable-cluster-overview"),
+					EnableOpenCensus:       viper.GetBool("enable-opencensus"),
+					KubeConfig:             viper.GetString("kubeconfig"),
+					Namespace:              viper.GetString("namespace"),
+					Namespaces:             viper.GetStringSlice("namespace-list"),
+					FrontendURL:            viper.GetString("ui-url"),
+					BrowserPath:            viper.GetString("browser-path"),
+					Context:                viper.GetString("context"),
+					ClientQPS:              float32(viper.GetFloat64("client-qps")),
+					ClientBurst:            viper.GetInt("client-burst"),
+					UserAgent:              fmt.Sprintf("octant/%s", version),
+					BuildInfo:              buildInfo,
 				}
 
-				if klogVerbosity > 0 {
-					klog.InitFlags(nil)
-					verbosityOpt := fmt.Sprintf("-v=%d", klogVerbosity)
-					if err := flag.CommandLine.Parse([]string{verbosityOpt, "-logtostderr=true"}); err != nil {
-						logger.WithErr(err).Errorf("unable to parse klog flags")
-					}
+				klogVerbosity := viper.GetString("klog-verbosity")
+				var klogOpts []string
 
+				klogFlagSet := flag.NewFlagSet("klog", flag.ContinueOnError)
+				if klogVerbosity == "" {
+					// klog's output is not helpful to Octant, so send it to the ether.
+					klogOpts = append(klogOpts,
+						fmt.Sprintf("-logtostderr=false"),
+						fmt.Sprintf("-alsologtostderr=false"),
+					)
+				} else {
+					klogOpts = append(klogOpts,
+						fmt.Sprintf("-v=%s", klogVerbosity),
+						fmt.Sprintf("-logtostderr=true"),
+						fmt.Sprintf("-alsologtostderr=true"),
+					)
 				}
 
-				if err := dash.Run(ctx, logger, shutdownCh, options); err != nil {
-					logger.WithErr(err).Errorf("dashboard failed")
+				klog.InitFlags(klogFlagSet)
+
+				_ = klogFlagSet.Parse(klogOpts)
+
+				ctxKubeConfig := ocontext.WithKubeConfigCh(ctx)
+				runner, err := dash.NewRunner(ctxKubeConfig, logger, options)
+				if err != nil {
+					golog.Printf("unable to start runner: %v", err)
 					os.Exit(1)
 				}
+
+				runner.Start(ctxKubeConfig, logger, options, nil, shutdownCh)
 
 				runCh <- true
 			}()
@@ -96,7 +133,7 @@ func newOctantCmd() *cobra.Command {
 			case <-sigCh:
 				logger.Debugf("Shutting dashboard down due to interrupt")
 				cancel()
-				// TODO implement graceful shutdown semantics
+				// TODO implement graceful shutdown semantics (GH#494)
 
 				<-shutdownCh
 			case <-runCh:
@@ -105,23 +142,58 @@ func newOctantCmd() *cobra.Command {
 		},
 	}
 
-	octantCmd.Flags().StringVarP(&namespace, "namespace", "n", "", "initial namespace")
-	octantCmd.Flags().StringVar(&uiURL, "ui-url", "", "dashboard url")
-	octantCmd.Flags().CountVarP(&verboseLevel, "verbosity", "v", "verbosity level")
-	octantCmd.Flags().BoolVarP(&enableOpenCensus, "enable-opencensus", "c", false, "enable open census")
-	octantCmd.Flags().StringVarP(&initialContext, "context", "", "", "initial context")
-	octantCmd.Flags().IntVarP(&klogVerbosity, "klog-verbosity", "", 0, "initial context")
-	octantCmd.Flags().Float32VarP(&clientQPS, "client-qps", "", 200, "maximum QPS for client")
-	octantCmd.Flags().IntVarP(&clientBurst, "client-burst", "", 400, "maximum burst for client throttle")
+	// All flags can also be environment variables by adding the OCTANT_ prefix
+	// and replacing - with _. Example: OCTANT_DISABLE_CLUSTER_OVERVIEW
+	octantCmd.Flags().SortFlags = false
 
-	kubeConfig = os.Getenv("KUBECONFIG")
-	if kubeConfig == "" {
-		kubeConfig = clientcmd.NewDefaultClientConfigLoadingRules().GetDefaultFilename()
-	}
+	octantCmd.Flags().StringP("context", "", "", "initial context")
+	octantCmd.Flags().BoolP("disable-cluster-overview", "", false, "disable cluster overview")
+	octantCmd.Flags().BoolP("enable-feature-applications", "", false, "enable applications feature")
+	octantCmd.Flags().String("kubeconfig", "", "absolute path to kubeConfig file")
+	octantCmd.Flags().StringP("namespace", "n", "", "initial namespace")
+	octantCmd.Flags().StringSlice("namespace-list", []string{}, "a list of namespaces to use on start")
+	octantCmd.Flags().StringP("plugin-path", "", "", "plugin path")
+	octantCmd.Flags().BoolP("verbose", "v", false, "turn on debug logging")
+	octantCmd.Flags().IntP("client-max-recv-msg-size", "", 1024*1024*16, "client max receiver message size")
 
-	octantCmd.Flags().StringVar(&kubeConfig, "kubeconfig", kubeConfig, "absolute path to kubeConfig file")
+	octantCmd.Flags().StringP("accepted-hosts", "", "", "accepted hosts list [DEV]")
+	octantCmd.Flags().Float32P("client-qps", "", 200, "maximum QPS for client [DEV]")
+	octantCmd.Flags().IntP("client-burst", "", 400, "maximum burst for client throttle [DEV]")
+	octantCmd.Flags().BoolP("disable-open-browser", "", false, "disable automatic launching of the browser [DEV]")
+	octantCmd.Flags().BoolP("enable-opencensus", "c", false, "enable open census [DEV]")
+	octantCmd.Flags().IntP("klog-verbosity", "", 0, "klog verbosity level [DEV]")
+	octantCmd.Flags().StringP("listener-addr", "", "", "listener address for the octant frontend [DEV]")
+	octantCmd.Flags().StringP("local-content", "", "", "local content path [DEV]")
+	octantCmd.Flags().StringP("proxy-frontend", "", "", "url to send frontend request to [DEV]")
+	octantCmd.Flags().String("ui-url", "", "dashboard url [DEV]")
+	octantCmd.Flags().String("browser-path", "", "the browser path to open the browser on")
 
 	return octantCmd
+}
+
+func bindViper(cmd *cobra.Command) error {
+	replacer := strings.NewReplacer("-", "_")
+	viper.SetEnvKeyReplacer(replacer)
+	viper.SetEnvPrefix("OCTANT")
+	viper.AutomaticEnv()
+
+	if err := viper.BindPFlags(cmd.Flags()); err != nil {
+		return err
+	}
+	if err := viper.BindEnv("xdg-config-home", "XDG_CONFIG_HOME"); err != nil {
+		return err
+	}
+	if err := viper.BindEnv("home", "HOME"); err != nil {
+		return err
+	}
+	if err := viper.BindEnv("local-app-data", "LOCALAPPDATA"); err != nil {
+		return err
+	}
+	if err := viper.BindEnv("kubeconfig", "KUBECONFIG"); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Returns a new zap logger, setting level according to the provided

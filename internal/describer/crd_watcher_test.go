@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 VMware, Inc. All Rights Reserved.
+Copyright (c) 2019 the Octant contributors. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -16,14 +16,21 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/vmware/octant/internal/config"
-	"github.com/vmware/octant/pkg/store"
-	objectStoreFake "github.com/vmware/octant/pkg/store/fake"
+	clusterFake "github.com/vmware-tanzu/octant/internal/cluster/fake"
+	"github.com/vmware-tanzu/octant/internal/config"
+	internalErr "github.com/vmware-tanzu/octant/internal/errors"
+	"github.com/vmware-tanzu/octant/pkg/store"
+	objectStoreFake "github.com/vmware-tanzu/octant/pkg/store/fake"
 )
 
 func TestNewDefaultCRDWatcher_requires_object_store(t *testing.T) {
+	controller := gomock.NewController(t)
+	defer controller.Finish()
+
+	client := clusterFake.NewMockClientInterface(controller)
+
 	ctx := context.Background()
-	_, err := NewDefaultCRDWatcher(ctx, nil)
+	_, err := NewDefaultCRDWatcher(ctx, client, nil, nil)
 	require.Error(t, err)
 }
 
@@ -32,6 +39,8 @@ func TestDefaultCRDWatcher_Watch(t *testing.T) {
 	defer controller.Finish()
 
 	ctx := context.Background()
+
+	client := clusterFake.NewMockClientInterface(controller)
 
 	objectStore := objectStoreFake.NewMockStore(controller)
 	objectStore.EXPECT().
@@ -43,8 +52,10 @@ func TestDefaultCRDWatcher_Watch(t *testing.T) {
 		})
 	objectStore.EXPECT().
 		RegisterOnUpdate(gomock.Any())
+	errorStore, err := internalErr.NewErrorStore()
+	require.NoError(t, err)
 
-	watcher, err := NewDefaultCRDWatcher(ctx, objectStore)
+	watcher, err := NewDefaultCRDWatcher(ctx, client, objectStore, errorStore)
 	require.NoError(t, err)
 
 	watchConfig := &config.CRDWatchConfig{
@@ -53,8 +64,8 @@ func TestDefaultCRDWatcher_Watch(t *testing.T) {
 		IsNamespaced: false,
 	}
 
-	err = watcher.Watch(ctx, watchConfig)
-	require.NoError(t, err)
+	require.NoError(t, watcher.AddConfig(watchConfig))
+	require.NoError(t, watcher.Watch(ctx))
 }
 
 func TestDefaultCRDWatcher_Watch_failure(t *testing.T) {
@@ -62,6 +73,8 @@ func TestDefaultCRDWatcher_Watch_failure(t *testing.T) {
 	defer controller.Finish()
 
 	ctx := context.Background()
+
+	client := clusterFake.NewMockClientInterface(controller)
 
 	objectStore := objectStoreFake.NewMockStore(controller)
 	objectStore.EXPECT().
@@ -71,8 +84,10 @@ func TestDefaultCRDWatcher_Watch_failure(t *testing.T) {
 		})
 	objectStore.EXPECT().
 		RegisterOnUpdate(gomock.Any())
+	errorStore, err := internalErr.NewErrorStore()
+	require.NoError(t, err)
 
-	watcher, err := NewDefaultCRDWatcher(ctx, objectStore)
+	watcher, err := NewDefaultCRDWatcher(ctx, client, objectStore, errorStore)
 	require.NoError(t, err)
 
 	watchConfig := &config.CRDWatchConfig{
@@ -81,7 +96,8 @@ func TestDefaultCRDWatcher_Watch_failure(t *testing.T) {
 		IsNamespaced: false,
 	}
 
-	err = watcher.Watch(ctx, watchConfig)
+	require.NoError(t, watcher.AddConfig(watchConfig))
+	err = watcher.Watch(ctx)
 	require.Error(t, err)
 }
 

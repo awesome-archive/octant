@@ -17,6 +17,7 @@
         "build": {
           "builder": "@angular-devkit/build-angular:browser",
           "options": {
+            "aot": true,
             "outputPath": "dist/dash-frontend",
             "index": "src/index.html",
             "main": "src/main.ts",
@@ -24,11 +25,27 @@
             "tsConfig": "src/tsconfig.app.json",
             "assets": [
               "src/favicon.ico",
-              "src/assets"
+              "src/assets",
+              {
+                "glob": "clr-ui-dark.min.css",
+                "input": "node_modules/@clr/ui",
+                "output": "assets/css"
+              },
+              {
+                "glob": "clr-ui.min.css",
+                "input": "node_modules/@clr/ui",
+                "output": "assets/css"
+              },
+              {
+                "glob": "**/*",
+                "input": "node_modules/monaco-editor/min/vs",
+                "output": "/lib/vs"
+              }
             ],
             "styles": [
               "node_modules/@clr/icons/clr-icons.min.css",
               "node_modules/@clr/ui/clr-ui.min.css",
+              "node_modules/@clr/ui/clr-ui-dark.min.css",
               "src/styles.scss"
             ],
             "scripts": [
@@ -57,8 +74,12 @@
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "2mb",
-                  "maximumError": "5mb"
+                  "maximumWarning": "3mb",
+                  "maximumError": "6mb"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "6kb"
                 }
               ]
             }
@@ -67,7 +88,8 @@
         "serve": {
           "builder": "@angular-devkit/build-angular:dev-server",
           "options": {
-            "browserTarget": "dash-frontend:build"
+            "browserTarget": "dash-frontend:build",
+            "disableHostCheck": true
           },
           "configurations": {
             "production": {
